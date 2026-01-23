@@ -16,7 +16,7 @@ Three simple components that work together:
 
 ```mermaid
 flowchart LR
-    A[Claude Desktop] -->|stdio| B[mcp-tools]
+    A[Agent] -->|stdio| B[mcp-tools]
     B -->|zrok| C[mcp-gateway]
     C -->|stdio| D[MCP Servers]
 ```
@@ -76,9 +76,9 @@ mcp-gateway run config.yml
 # outputs: {"share_token":"abc123..."}
 ```
 
-### 4. Connect from Claude Desktop
+### 4. Connect from Agent
 
-Add to Claude Desktop config:
+Add to agent config:
 ```json
 {
   "mcpServers": {
@@ -90,7 +90,7 @@ Add to Claude Desktop config:
 }
 ```
 
-That's it. Claude can now use tools from both backends through a single secure connection.
+That's it. Your agent can now use tools from both backends through a single secure connection.
 
 ## Use Cases
 
