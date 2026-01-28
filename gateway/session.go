@@ -185,10 +185,11 @@ func (cs *ClientSession) connectZrokBackend(ctx context.Context, cfg aggregator.
 		HTTPClient: access.HTTPClient(),
 	}
 
-	connectCtx, cancel := context.WithTimeout(ctx, cs.config.Aggregator.Connection.ConnectTimeout)
-	defer cancel()
-
-	session, err := mcpClient.Connect(connectCtx, sseTransport, nil)
+	// for SSE transports, the context controls the HTTP connection lifetime.
+	// we use the session context (ctx) directly rather than a timeout context,
+	// because cancelling the context closes the SSE connection.
+	// the connect timeout is enforced by the HTTP client's dial timeout instead.
+	session, err := mcpClient.Connect(ctx, sseTransport, nil)
 	if err != nil {
 		access.Close()
 		return nil, fmt.Errorf("failed to connect to zrok backend: %w", err)
