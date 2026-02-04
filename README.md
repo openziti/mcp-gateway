@@ -35,6 +35,8 @@ flowchart LR
 
 ## Quick Start
 
+> **New to MCP Gateway?** See the [Getting Started Guide](GETTING-STARTED.md) for a complete walkthrough.
+
 ### 1. Install
 
 ```bash
