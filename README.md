@@ -129,7 +129,7 @@ mcp-tools run <share_token>
 
 ### Chain Bridges and Gateways
 
-Gateway can connect to remote bridges as backends:
+Gateway can connect to remote bridges (or other gateways) as backends:
 
 ```yaml
 backends:
