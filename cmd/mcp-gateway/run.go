@@ -5,11 +5,20 @@ import (
 	"errors"
 	"os"
 	"os/signal"
-	"syscall"
 
 	"github.com/michaelquigley/df/dl"
 	"github.com/openziti/mcp-gateway/gateway"
 	"github.com/spf13/cobra"
+)
+
+// Platform hooks implemented in platform_*.go files.
+// redirectStderr: on Linux uses syscall.Dup3; nil on other platforms.
+// ignoreOrchSignals: on Unix ignores SIGPIPE/SIGHUP/SIGURG; nil on Windows.
+// termSignals: returns platform-appropriate termination signals for NotifyContext.
+var (
+	redirectStderr  func(fd uintptr) error
+	ignoreOrchSignals func()
+	termSignals     func() []os.Signal
 )
 
 func init() {
@@ -35,9 +44,15 @@ func (cmd *runCommand) run(_ *cobra.Command, args []string) {
 	configPath := args[0]
 
 	// ignore signals that could cause unexpected exit when orchestrator disconnects
-	signal.Ignore(syscall.SIGPIPE, syscall.SIGHUP, syscall.SIGURG)
+	if ignoreOrchSignals != nil {
+		ignoreOrchSignals()
+	}
 
-	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	sigs := []os.Signal{os.Interrupt}
+	if termSignals != nil {
+		sigs = termSignals()
+	}
+	ctx, cancel := signal.NotifyContext(context.Background(), sigs...)
 	defer cancel()
 
 	// load config first to check for log file redirection
@@ -58,8 +73,10 @@ func (cmd *runCommand) run(_ *cobra.Command, args []string) {
 
 		// redirect stderr to log file so we can see panic messages
 		// (panics go to stderr, not to the logger)
-		if err := syscall.Dup2(int(logFile.Fd()), int(os.Stderr.Fd())); err != nil {
-			dl.Warnf("failed to redirect stderr to log file: %v", err)
+		if redirectStderr != nil {
+			if err := redirectStderr(logFile.Fd()); err != nil {
+				dl.Warnf("failed to redirect stderr to log file: %v", err)
+			}
 		}
 	}
 
