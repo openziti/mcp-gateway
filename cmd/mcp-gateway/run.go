@@ -11,15 +11,8 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// Platform hooks implemented in platform_*.go files.
-// redirectStderr: on Linux uses syscall.Dup3; nil on other platforms.
-// ignoreOrchSignals: on Unix ignores SIGPIPE/SIGHUP/SIGURG; nil on Windows.
-// termSignals: returns platform-appropriate termination signals for NotifyContext.
-var (
-	redirectStderr  func(fd uintptr) error
-	ignoreOrchSignals func()
-	termSignals     func() []os.Signal
-)
+// redirectStderr is set in platform_linux.go to redirect stderr via syscall.Dup3.
+var redirectStderr func(fd uintptr) error
 
 func init() {
 	rootCmd.AddCommand(newRunCommand().cmd)
@@ -43,16 +36,7 @@ func newRunCommand() *runCommand {
 func (cmd *runCommand) run(_ *cobra.Command, args []string) {
 	configPath := args[0]
 
-	// ignore signals that could cause unexpected exit when orchestrator disconnects
-	if ignoreOrchSignals != nil {
-		ignoreOrchSignals()
-	}
-
-	sigs := []os.Signal{os.Interrupt}
-	if termSignals != nil {
-		sigs = termSignals()
-	}
-	ctx, cancel := signal.NotifyContext(context.Background(), sigs...)
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer cancel()
 
 	// load config first to check for log file redirection
