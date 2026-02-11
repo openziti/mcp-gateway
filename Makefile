@@ -16,7 +16,10 @@ LDFLAGS      := -s -w \
                 -X $(MODULE)/build.Date=$(DATE) \
                 -X $(MODULE)/build.BuiltBy=make
 
-.PHONY: all build install snapshot docker test clean help
+# release matrix matching goreleaser configs
+PLATFORMS := linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64
+
+.PHONY: all build build-all install snapshot docker test clean help
 
 ## default: build all binaries into $(DIST_DIR)/
 all: build
@@ -26,6 +29,19 @@ build:
 	for cmd in $(CMDS); do \
 		$(GO) build -ldflags '$(LDFLAGS)' -o $(DIST_DIR)/$$cmd ./cmd/$$cmd; \
 	done
+
+## build-all: cross-compile all binaries for every release platform
+build-all:
+	@for platform in $(PLATFORMS); do \
+		os=$${platform%%/*}; arch=$${platform##*/}; \
+		for cmd in $(CMDS); do \
+			out=$(DIST_DIR)/$$os/$$arch/$$cmd; \
+			printf "%-20s %s\n" "$$os/$$arch" "$$cmd"; \
+			CGO_ENABLED=0 GOOS=$$os GOARCH=$$arch \
+				$(GO) build -ldflags '$(LDFLAGS)' -o $$out ./cmd/$$cmd; \
+		done; \
+	done
+	@echo "done: $$(find $(DIST_DIR) -type f | wc -l) artifacts in $(DIST_DIR)/"
 
 ## install: go install all commands into $GOPATH/bin
 install:
