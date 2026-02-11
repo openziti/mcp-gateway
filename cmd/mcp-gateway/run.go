@@ -11,7 +11,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// redirectStderr is set in platform_linux.go to redirect stderr via syscall.Dup3.
+// redirectStderr is set in platform_unix.go to redirect stderr via unix.Dup2.
 var redirectStderr func(fd uintptr) error
 
 func init() {
