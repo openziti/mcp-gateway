@@ -1,0 +1,54 @@
+name: Post Event to Mattermost
+on:
+  create:
+  delete:
+  issues:
+  issue_comment:
+  pull_request_review:
+    types:
+      - submitted
+  pull_request_review_comment:
+  pull_request:
+    types:
+      - opened
+      - reopened
+  push:
+  fork:
+  release:
+    types:
+      - released
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  mattermost_webhook:
+    runs-on: ubuntu-latest
+    name: Ziti Mattermost Action - Py
+    env:
+      # filter out testing fork runs where secrets are undefined
+      HAVE_SECRETS: ${{ secrets.ZHOOK_URL_DEV_NOTIFICATIONS != '' && secrets.ZITI_MATTERMOST_IDENTITY != '' }}
+      # filter out uninteresting events
+      IS_INTERESTING: ${{ github.event_name != 'pull_request_review' || (github.event_name == 'pull_request_review' && github.event.review.state == 'approved') }}
+    steps:
+    - uses: openziti/ziti-mattermost-action-py@v1
+      if: ${{ env.HAVE_SECRETS == 'true' && env.IS_INTERESTING == 'true' }}
+      with:
+        # Identity JSON or Base64 encoded JSON
+        zitiId: ${{ secrets.ZITI_MATTERMOST_IDENTITY }}
+
+        # http://<ziti service intercept address>/hooks/<incoming webhook secret token>
+        # http://mattermost.ziti.internal:80/hooks/asdflkhjasdflkhjasdflkhjasdflkhj
+        webhookUrl: ${{ secrets.ZHOOK_URL_DEV_NOTIFICATIONS }}
+
+        # Event JSON or Base64 encoded JSON
+        eventJson: ${{ toJson(github.event) }}
+
+        # Sender username to spoof in Mattermost
+        senderUsername: GitHubZ
+
+        # In Mattermost server, the incoming webhook URL must be configured to allow this specific channel or all
+        # channels
+        destChannel: dev-notifications
+
