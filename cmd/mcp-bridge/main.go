@@ -8,6 +8,7 @@ import (
 
 	"github.com/michaelquigley/df/dl"
 	"github.com/openziti/mcp-gateway/bridge"
+	"github.com/openziti/mcp-gateway/build"
 	"github.com/spf13/cobra"
 )
 
@@ -18,10 +19,11 @@ var (
 )
 
 var rootCmd = &cobra.Command{
-	Use:   "mcp-bridge <command> [args...]",
-	Short: "bridge a local stdio mcp server to the network via zrok",
-	Args:  cobra.MinimumNArgs(1),
-	Run:   run,
+	Use:     "mcp-bridge <command> [args...]",
+	Short:   "bridge a local stdio mcp server to the network via zrok",
+	Version: build.String(),
+	Args:    cobra.MinimumNArgs(1),
+	Run:     run,
 }
 
 func init() {

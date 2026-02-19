@@ -5,12 +5,14 @@ import (
 	"errors"
 	"os"
 	"os/signal"
-	"syscall"
 
 	"github.com/michaelquigley/df/dl"
 	"github.com/openziti/mcp-gateway/gateway"
 	"github.com/spf13/cobra"
 )
+
+// redirectStderr is set in platform_unix.go to redirect stderr via unix.Dup2.
+var redirectStderr func(fd uintptr) error
 
 func init() {
 	rootCmd.AddCommand(newRunCommand().cmd)
@@ -34,10 +36,7 @@ func newRunCommand() *runCommand {
 func (cmd *runCommand) run(_ *cobra.Command, args []string) {
 	configPath := args[0]
 
-	// ignore signals that could cause unexpected exit when orchestrator disconnects
-	signal.Ignore(syscall.SIGPIPE, syscall.SIGHUP, syscall.SIGURG)
-
-	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer cancel()
 
 	// load config first to check for log file redirection
@@ -58,8 +57,10 @@ func (cmd *runCommand) run(_ *cobra.Command, args []string) {
 
 		// redirect stderr to log file so we can see panic messages
 		// (panics go to stderr, not to the logger)
-		if err := syscall.Dup2(int(logFile.Fd()), int(os.Stderr.Fd())); err != nil {
-			dl.Warnf("failed to redirect stderr to log file: %v", err)
+		if redirectStderr != nil {
+			if err := redirectStderr(logFile.Fd()); err != nil {
+				dl.Warnf("failed to redirect stderr to log file: %v", err)
+			}
 		}
 	}
 

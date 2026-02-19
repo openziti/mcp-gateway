@@ -1,0 +1,102 @@
+name: Publish Docker Images
+
+on:
+  workflow_call:
+    inputs:
+      release-version:
+        description: Image tag to publish for mcp-gateway container images
+        type: string
+        required: true
+
+jobs:
+  publish-docker-images:
+    runs-on: ubuntu-24.04
+    permissions:
+      id-token: write      # need write to get OIDC token for generating attestations
+      attestations: write  # need write to create attestations
+    env:
+      REGISTRY: docker.io
+      RELEASE_REF: ${{ inputs.release-version }}
+    steps:
+      # compose the semver string without leading "refs/tags" or "v" so we can predict the
+      # release artifact filename
+      - name: Set Version Semver from Tag Ref
+        id: semver
+        shell: bash
+        run: |
+          echo "semver=${RELEASE_REF#v}" | tee -a $GITHUB_OUTPUT
+
+      - name: Checkout Workspace
+        uses: actions/checkout@v4
+
+      - name: Download Linux AMD64 Release Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: release-builds-linux-amd64
+          path: dist/amd64/linux
+
+      - name: Download Linux ARM64 Release Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: release-builds-linux-arm64
+          path: dist/arm64/linux
+
+      - name: Unpack the Release Artifacts
+        shell: bash
+        run: |
+          for DIR in dist/{amd,arm}64/linux; do
+            for TGZ in ${DIR}/*.tar.gz; do
+              tar -xvzf "${TGZ}" -C "${DIR}"
+            done
+          done
+
+      - name: Set Up QEMU
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: amd64,arm64
+
+      - name: Set Up Docker BuildKit
+        id: buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ vars.DOCKER_HUB_API_USER || secrets.DOCKER_HUB_API_USER }}
+          password: ${{ secrets.DOCKER_HUB_API_TOKEN }}
+
+      - name: Docker Metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ vars.MCP_GATEWAY_CONTAINER_IMAGE_REPO || 'openziti/mcp-gateway' }}
+          flavor: |
+            latest=false
+          tags: |
+            type=semver,pattern={{version}},value=${{ inputs.release-version }}
+
+      - name: Build & Push Multi-Platform Container Image to Hub
+        uses: docker/build-push-action@v6
+        id: push
+        with:
+          builder: ${{ steps.buildx.outputs.name }}
+          context: ${{ github.workspace }}/
+          file: ${{ github.workspace }}/docker/images/mcp-gateway/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            ARTIFACTS_DIR=./dist
+          provenance: mode=max
+          sbom: true
+          push: true
+
+      - name: Publish Attestations to GitHub
+        uses: actions/attest-build-provenance@v1
+        env:
+          IMAGE_REPO: ${{ vars.MCP_GATEWAY_CONTAINER_IMAGE_REPO || 'openziti/mcp-gateway' }}
+        with:
+          subject-name: ${{ env.REGISTRY }}/${{ env.IMAGE_REPO }}
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true

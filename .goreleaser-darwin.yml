@@ -1,0 +1,97 @@
+version: 2
+builds:
+- id: mcp-gateway-darwin-amd64
+  main: ./cmd/mcp-gateway
+  binary: mcp-gateway
+  ldflags:
+    - -s -w
+    - -X github.com/openziti/mcp-gateway/build.Version={{.Tag}}
+    - -X github.com/openziti/mcp-gateway/build.Hash={{.ShortCommit}}
+    - -X github.com/openziti/mcp-gateway/build.Date={{.Date}}
+    - -X github.com/openziti/mcp-gateway/build.BuiltBy=goreleaser
+  env:
+    - CGO_ENABLED=0
+  goos:
+    - darwin
+  goarch:
+    - amd64
+
+- id: mcp-bridge-darwin-amd64
+  main: ./cmd/mcp-bridge
+  binary: mcp-bridge
+  ldflags:
+    - -s -w
+    - -X github.com/openziti/mcp-gateway/build.Version={{.Tag}}
+    - -X github.com/openziti/mcp-gateway/build.Hash={{.ShortCommit}}
+    - -X github.com/openziti/mcp-gateway/build.Date={{.Date}}
+    - -X github.com/openziti/mcp-gateway/build.BuiltBy=goreleaser
+  env:
+    - CGO_ENABLED=0
+  goos:
+    - darwin
+  goarch:
+    - amd64
+
+- id: mcp-tools-darwin-amd64
+  main: ./cmd/mcp-tools
+  binary: mcp-tools
+  ldflags:
+    - -s -w
+    - -X github.com/openziti/mcp-gateway/build.Version={{.Tag}}
+    - -X github.com/openziti/mcp-gateway/build.Hash={{.ShortCommit}}
+    - -X github.com/openziti/mcp-gateway/build.Date={{.Date}}
+    - -X github.com/openziti/mcp-gateway/build.BuiltBy=goreleaser
+  env:
+    - CGO_ENABLED=0
+  goos:
+    - darwin
+  goarch:
+    - amd64
+
+- id: mcp-gateway-darwin-arm64
+  main: ./cmd/mcp-gateway
+  binary: mcp-gateway
+  ldflags:
+    - -s -w
+    - -X github.com/openziti/mcp-gateway/build.Version={{.Tag}}
+    - -X github.com/openziti/mcp-gateway/build.Hash={{.ShortCommit}}
+    - -X github.com/openziti/mcp-gateway/build.Date={{.Date}}
+    - -X github.com/openziti/mcp-gateway/build.BuiltBy=goreleaser
+  env:
+    - CGO_ENABLED=0
+  goos:
+    - darwin
+  goarch:
+    - arm64
+
+- id: mcp-bridge-darwin-arm64
+  main: ./cmd/mcp-bridge
+  binary: mcp-bridge
+  ldflags:
+    - -s -w
+    - -X github.com/openziti/mcp-gateway/build.Version={{.Tag}}
+    - -X github.com/openziti/mcp-gateway/build.Hash={{.ShortCommit}}
+    - -X github.com/openziti/mcp-gateway/build.Date={{.Date}}
+    - -X github.com/openziti/mcp-gateway/build.BuiltBy=goreleaser
+  env:
+    - CGO_ENABLED=0
+  goos:
+    - darwin
+  goarch:
+    - arm64
+
+- id: mcp-tools-darwin-arm64
+  main: ./cmd/mcp-tools
+  binary: mcp-tools
+  ldflags:
+    - -s -w
+    - -X github.com/openziti/mcp-gateway/build.Version={{.Tag}}
+    - -X github.com/openziti/mcp-gateway/build.Hash={{.ShortCommit}}
+    - -X github.com/openziti/mcp-gateway/build.Date={{.Date}}
+    - -X github.com/openziti/mcp-gateway/build.BuiltBy=goreleaser
+  env:
+    - CGO_ENABLED=0
+  goos:
+    - darwin
+  goarch:
+    - arm64
