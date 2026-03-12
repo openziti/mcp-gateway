@@ -25,7 +25,7 @@ Enter your email address when prompted. You'll receive an invitation email with 
 
 ### Install zrok
 
-Download the zrok `v2.0.0-rc5`+ binary for your platform from the [releases page](https://github.com/openziti/zrok/releases/tag/v2.0.0-rc5).
+Download the zrok `v2.0.0-rc7`+ binary for your platform from the [releases page](https://github.com/openziti/zrok/releases/tag/v2.0.0-rc7).
 
 The binary is named `zrok2` to distinguish it from the v1.x series.
 

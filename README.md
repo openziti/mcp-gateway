@@ -45,7 +45,7 @@ go install github.com/openziti/mcp-gateway/cmd/...@latest
 
 ### 2. Enable zrok
 
-> **Note:** mcp-gateway requires zrok `v2.0.x` or later. Currently the best release is [zrok v2.0.0-rc5](https://github.com/openziti/zrok/releases/tag/v2.0.0-rc5)
+> **Note:** mcp-gateway requires zrok `v2.0.x` or later. Currently the best release is [zrok v2.0.0-rc7](https://github.com/openziti/zrok/releases/tag/v2.0.0-rc7)
 
 ```bash
 zrok2 enable <your-zrok-token>  # get token at https://api-v2.zrok.io
