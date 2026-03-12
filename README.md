@@ -35,7 +35,7 @@ flowchart LR
 
 ## Quick Start
 
-> **New to MCP Gateway?** See the [Getting Started Guide](GETTING-STARTED.md) for a complete walkthrough.
+> **New to MCP Gateway?** See the [Getting Started Guide](docs/GETTING-STARTED.md) for a complete walkthrough.
 
 ### 1. Install
 
