@@ -15,16 +15,16 @@ import (
 )
 
 type readFileParams struct {
-	Path string `json:"path" jsonschema:"description=path to the file to read"`
+	Path string `json:"path" jsonschema:"path to the file to read"`
 }
 
 type writeFileParams struct {
-	Path    string `json:"path" jsonschema:"description=path to the file to write"`
-	Content string `json:"content" jsonschema:"description=content to write to the file"`
+	Path    string `json:"path" jsonschema:"path to the file to write"`
+	Content string `json:"content" jsonschema:"content to write to the file"`
 }
 
 type listDirectoryParams struct {
-	Path string `json:"path" jsonschema:"description=path to the directory to list"`
+	Path string `json:"path" jsonschema:"path to the directory to list"`
 }
 
 var rootCmd = &cobra.Command{
