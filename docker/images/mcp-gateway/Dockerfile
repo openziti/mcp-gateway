@@ -24,6 +24,7 @@ RUN mkdir -p /usr/local/bin
 COPY --chmod=0755 ${ARTIFACTS_DIR}/${TARGETARCH}/${TARGETOS}/mcp-gateway \
       ${ARTIFACTS_DIR}/${TARGETARCH}/${TARGETOS}/mcp-bridge \
       ${ARTIFACTS_DIR}/${TARGETARCH}/${TARGETOS}/mcp-tools \
+      ${ARTIFACTS_DIR}/${TARGETARCH}/${TARGETOS}/mcp-filesystem \
       /usr/local/bin/
 
 USER 65534:65534

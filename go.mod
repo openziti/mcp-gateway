@@ -7,9 +7,10 @@ require (
 	github.com/michaelquigley/df v0.3.7
 	github.com/modelcontextprotocol/go-sdk v1.1.0
 	github.com/openziti/sdk-golang v1.2.8
-	github.com/openziti/zrok/v2 v2.0.0-rc5
+	github.com/openziti/zrok/v2 v2.0.0-rc7
 	github.com/pkg/errors v0.9.1
 	github.com/spf13/cobra v1.10.1
+	golang.org/x/sys v0.40.0
 	google.golang.org/grpc v1.78.0
 	google.golang.org/protobuf v1.36.11
 )
@@ -98,7 +99,6 @@ require (
 	golang.org/x/net v0.48.0 // indirect
 	golang.org/x/oauth2 v0.33.0 // indirect
 	golang.org/x/sync v0.19.0 // indirect
-	golang.org/x/sys v0.40.0 // indirect
 	golang.org/x/term v0.39.0 // indirect
 	golang.org/x/text v0.33.0 // indirect
 	golang.org/x/time v0.14.0 // indirect

@@ -47,3 +47,19 @@ builds:
     - windows
   goarch:
     - amd64
+
+- id: mcp-filesystem-windows
+  main: ./cmd/mcp-filesystem
+  binary: mcp-filesystem
+  ldflags:
+    - -s -w
+    - -X github.com/openziti/mcp-gateway/build.Version={{.Tag}}
+    - -X github.com/openziti/mcp-gateway/build.Hash={{.ShortCommit}}
+    - -X github.com/openziti/mcp-gateway/build.Date={{.Date}}
+    - -X github.com/openziti/mcp-gateway/build.BuiltBy=goreleaser
+  env:
+    - CGO_ENABLED=0
+  goos:
+    - windows
+  goarch:
+    - amd64
