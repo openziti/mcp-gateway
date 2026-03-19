@@ -15,7 +15,7 @@ var rootCmd = &cobra.Command{
 }
 
 func main() {
-	dl.Init(dl.DefaultOptions().SetTrimPrefix("github.com/openziti/"))
+	dl.Init(dl.DefaultOptions().SetTrimPrefix("github.com/openziti/").SetOutput(os.Stderr))
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)
 	}
