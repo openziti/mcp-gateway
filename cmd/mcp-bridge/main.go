@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os/signal"
 	"syscall"
 
@@ -19,11 +20,13 @@ var (
 )
 
 var rootCmd = &cobra.Command{
-	Use:     "mcp-bridge <command> [args...]",
-	Short:   "bridge a local stdio mcp server to the network via zrok",
-	Version: build.String(),
-	Args:    cobra.MinimumNArgs(1),
-	Run:     run,
+	Use:           "mcp-bridge <command> [args...]",
+	Short:         "bridge a local stdio mcp server to the network via zrok",
+	Version:       build.String(),
+	Args:          cobra.MinimumNArgs(1),
+	RunE:          run,
+	SilenceErrors: true,
+	SilenceUsage:  true,
 }
 
 func init() {
@@ -32,7 +35,17 @@ func init() {
 	rootCmd.Flags().StringVar(&shareToken, "share-token", "", "pre-created zrok share token (managed mode)")
 }
 
-func run(_ *cobra.Command, args []string) {
+type bridgeRunner interface {
+	Start(context.Context) error
+	Run(context.Context) error
+	Stop() error
+}
+
+var newBridgeRunner = func(cfg *bridge.Config) (bridgeRunner, error) {
+	return bridge.New(cfg)
+}
+
+func run(_ *cobra.Command, args []string) (retErr error) {
 	command := args[0]
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -57,19 +70,29 @@ func run(_ *cobra.Command, args []string) {
 		ShareToken: shareToken,
 	}
 
-	b, err := bridge.New(cfg)
+	b, err := newBridgeRunner(cfg)
 	if err != nil {
-		dl.Fatalf("failed to create bridge: %v", err)
+		return fmt.Errorf("failed to create bridge: %w", err)
 	}
 
 	if err := b.Start(ctx); err != nil {
-		dl.Fatalf("failed to start: %v", err)
+		return fmt.Errorf("failed to start: %w", err)
 	}
-	defer b.Stop()
+	defer func() {
+		if err := b.Stop(); err != nil {
+			if retErr == nil {
+				retErr = fmt.Errorf("failed to stop bridge: %w", err)
+			} else {
+				dl.Log().With("error", err).Warn("failed to stop bridge during cleanup")
+			}
+		}
+	}()
 
 	if err := b.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
-		dl.Fatalf("error: %v", err)
+		return fmt.Errorf("run failed: %w", err)
 	}
+
+	return nil
 }
 
 func main() {

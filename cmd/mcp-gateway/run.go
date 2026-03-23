@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/signal"
 
@@ -22,6 +23,18 @@ type runCommand struct {
 	cmd *cobra.Command
 }
 
+type gatewayRunner interface {
+	Start(context.Context) error
+	Run(context.Context) error
+	Stop() error
+}
+
+var loadGatewayConfig = gateway.LoadConfig
+
+var newGatewayRunner = func(cfg *gateway.Config) (gatewayRunner, error) {
+	return gateway.New(cfg)
+}
+
 func newRunCommand() *runCommand {
 	cmd := &cobra.Command{
 		Use:   "run <configPath>",
@@ -29,20 +42,20 @@ func newRunCommand() *runCommand {
 		Args:  cobra.ExactArgs(1),
 	}
 	command := &runCommand{cmd: cmd}
-	cmd.Run = command.run
+	cmd.RunE = command.run
 	return command
 }
 
-func (cmd *runCommand) run(_ *cobra.Command, args []string) {
+func (cmd *runCommand) run(_ *cobra.Command, args []string) (retErr error) {
 	configPath := args[0]
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer cancel()
 
 	// load config first to check for log file redirection
-	cfg, err := gateway.LoadConfig(configPath)
+	cfg, err := loadGatewayConfig(configPath)
 	if err != nil {
-		dl.Fatalf("failed to load config: %v", err)
+		return fmt.Errorf("failed to load config: %w", err)
 	}
 
 	// if log file is specified, redirect logging to it with JSON format
@@ -50,7 +63,7 @@ func (cmd *runCommand) run(_ *cobra.Command, args []string) {
 	if cfg.LogFile != "" {
 		logFile, err := os.OpenFile(cfg.LogFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 		if err != nil {
-			dl.Fatalf("failed to open log file '%s': %v", cfg.LogFile, err)
+			return fmt.Errorf("failed to open log file '%s': %w", cfg.LogFile, err)
 		}
 		defer logFile.Close()
 		dl.Init(dl.DefaultOptions().SetTrimPrefix("github.com/openziti/").SetOutput(logFile).JSON())
@@ -64,17 +77,27 @@ func (cmd *runCommand) run(_ *cobra.Command, args []string) {
 		}
 	}
 
-	b, err := gateway.New(cfg)
+	b, err := newGatewayRunner(cfg)
 	if err != nil {
-		dl.Fatalf("failed to create gateway: %v", err)
+		return fmt.Errorf("failed to create gateway: %w", err)
 	}
 
 	if err := b.Start(ctx); err != nil {
-		dl.Fatalf("failed to start: %v", err)
+		return fmt.Errorf("failed to start: %w", err)
 	}
-	defer b.Stop()
+	defer func() {
+		if err := b.Stop(); err != nil {
+			if retErr == nil {
+				retErr = fmt.Errorf("failed to stop gateway: %w", err)
+			} else {
+				dl.Log().With("error", err).Warn("failed to stop gateway during cleanup")
+			}
+		}
+	}()
 
 	if err := b.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
-		dl.Fatalf("error: %v", err)
+		return fmt.Errorf("run failed: %w", err)
 	}
+
+	return nil
 }
