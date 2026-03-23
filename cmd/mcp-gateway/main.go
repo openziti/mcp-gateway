@@ -7,9 +7,11 @@ import (
 )
 
 var rootCmd = &cobra.Command{
-	Use:     "mcp-gateway",
-	Short:   "Aggregate and serve MCP tools via zrok",
-	Version: build.String(),
+	Use:           "mcp-gateway",
+	Short:         "Aggregate and serve MCP tools via zrok",
+	Version:       build.String(),
+	SilenceErrors: true,
+	SilenceUsage:  true,
 }
 
 func main() {
