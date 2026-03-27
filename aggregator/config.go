@@ -45,6 +45,17 @@ type TransportConfig struct {
 	WorkingDir string
 	// zrok transport fields
 	ShareToken string
+	// https transport fields
+	Endpoint string
+	Protocol string            // "sse" (default) or "streamable"
+	Headers  map[string]string
+	TLS      *TLSConfig
+}
+
+// TLSConfig provides optional TLS settings for HTTPS backends.
+type TLSConfig struct {
+	InsecureSkipVerify bool
+	CACertFile         string
 }
 
 // ToolFilterConfig defines which tools are permitted.
@@ -123,10 +134,23 @@ func (c *Config) Validate() error {
 					Message: "share_token is required for zrok transport",
 				}
 			}
+		case "https":
+			if b.Transport.Endpoint == "" {
+				return &ConfigError{
+					Field:   fmt.Sprintf("backends[%d].transport.endpoint", i),
+					Message: "endpoint is required for https transport",
+				}
+			}
+			if b.Transport.Protocol != "" && b.Transport.Protocol != "sse" && b.Transport.Protocol != "streamable" {
+				return &ConfigError{
+					Field:   fmt.Sprintf("backends[%d].transport.protocol", i),
+					Message: fmt.Sprintf("unsupported protocol '%s', must be 'sse' or 'streamable'", b.Transport.Protocol),
+				}
+			}
 		default:
 			return &ConfigError{
 				Field:   fmt.Sprintf("backends[%d].transport.type", i),
-				Message: fmt.Sprintf("unsupported transport type '%s', must be 'stdio' or 'zrok'", b.Transport.Type),
+				Message: fmt.Sprintf("unsupported transport type '%s', must be 'stdio', 'zrok', or 'https'", b.Transport.Type),
 			}
 		}
 

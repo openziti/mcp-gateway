@@ -117,6 +117,8 @@ func (cs *ClientSession) connectBackend(ctx context.Context, cfg aggregator.Back
 		return cs.connectStdioBackend(ctx, cfg)
 	case "zrok":
 		return cs.connectZrokBackend(ctx, cfg)
+	case "https":
+		return cs.connectHttpsBackend(ctx, cfg)
 	default:
 		return nil, fmt.Errorf("unsupported transport type '%s'", cfg.Transport.Type)
 	}
@@ -201,6 +203,42 @@ func (cs *ClientSession) connectZrokBackend(ctx context.Context, cfg aggregator.
 		client:  mcpClient,
 		session: session,
 		access:  access,
+	}, nil
+}
+
+// connectHttpsBackend creates an HTTP(S) connection to a remote MCP backend.
+func (cs *ClientSession) connectHttpsBackend(ctx context.Context, cfg aggregator.BackendConfig) (*sessionBackend, error) {
+	mcpClient := mcp.NewClient(
+		&mcp.Implementation{
+			Name:    cs.config.Aggregator.Name,
+			Version: cs.config.Aggregator.Version,
+		},
+		nil,
+	)
+
+	httpClient, err := aggregator.BuildHTTPSClient(cfg.Transport)
+	if err != nil {
+		return nil, fmt.Errorf("failed to build http client: %w", err)
+	}
+
+	transport, err := aggregator.BuildMCPTransport(cfg.Transport, httpClient)
+	if err != nil {
+		return nil, fmt.Errorf("failed to build mcp transport: %w", err)
+	}
+
+	// for HTTP-based transports, the context controls the connection lifetime.
+	// we use the session context directly rather than a timeout context,
+	// because cancelling the context closes the connection.
+	session, err := mcpClient.Connect(ctx, transport, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to connect to https backend: %w", err)
+	}
+
+	return &sessionBackend{
+		id:      cfg.ID,
+		cfg:     cfg,
+		client:  mcpClient,
+		session: session,
 	}, nil
 }
 

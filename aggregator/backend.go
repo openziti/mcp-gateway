@@ -65,6 +65,8 @@ func (m *BackendManager) connectBackend(ctx context.Context, cfg BackendConfig) 
 		return m.connectStdioBackend(ctx, cfg)
 	case "zrok":
 		return m.connectZrokBackend(ctx, cfg)
+	case "https":
+		return m.connectHttpsBackend(ctx, cfg)
 	default:
 		return nil, fmt.Errorf("unsupported transport type '%s'", cfg.Transport.Type)
 	}
@@ -174,6 +176,53 @@ func (m *BackendManager) connectZrokBackend(ctx context.Context, cfg BackendConf
 		session: session,
 		tools:   toolsResult.Tools,
 		access:  access,
+	}, nil
+}
+
+// connectHttpsBackend establishes a connection to a remote HTTPS backend.
+func (m *BackendManager) connectHttpsBackend(ctx context.Context, cfg BackendConfig) (*Backend, error) {
+	mcpClient := mcp.NewClient(
+		&mcp.Implementation{
+			Name:    m.config.Aggregator.Name,
+			Version: m.config.Aggregator.Version,
+		},
+		nil,
+	)
+
+	httpClient, err := BuildHTTPSClient(cfg.Transport)
+	if err != nil {
+		return nil, fmt.Errorf("failed to build http client: %w", err)
+	}
+
+	transport, err := BuildMCPTransport(cfg.Transport, httpClient)
+	if err != nil {
+		return nil, fmt.Errorf("failed to build mcp transport: %w", err)
+	}
+
+	session, err := mcpClient.Connect(ctx, transport, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to connect to https backend: %w", err)
+	}
+
+	toolsResult, err := session.ListTools(ctx, nil)
+	if err != nil {
+		session.Close()
+		return nil, fmt.Errorf("failed to list tools from https backend: %w", err)
+	}
+
+	name := cfg.Name
+	if name == "" {
+		name = cfg.ID
+	}
+
+	dl.Log().With("backend", cfg.ID).With("endpoint", cfg.Transport.Endpoint).Info("connected to https backend")
+
+	return &Backend{
+		id:      cfg.ID,
+		name:    name,
+		client:  mcpClient,
+		session: session,
+		tools:   toolsResult.Tools,
 	}, nil
 }
 
