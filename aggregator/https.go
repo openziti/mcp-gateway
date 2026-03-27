@@ -5,6 +5,7 @@ import (
 	"crypto/x509"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -12,12 +13,16 @@ import (
 
 var systemCertPool = x509.SystemCertPool
 
-// BuildHTTPSClient creates an http.Client configured with TLS and header injection
-// for connecting to HTTPS MCP backends.
-func BuildHTTPSClient(cfg TransportConfig) (*http.Client, error) {
+// BuildHTTPClient creates an http.Client configured with TLS and header injection
+// for connecting to HTTP(S) MCP backends.
+func BuildHTTPClient(cfg TransportConfig) (*http.Client, error) {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
+	endpoint, err := validateEndpointForClient(cfg)
+	if err != nil {
+		return nil, err
+	}
 
-	if cfg.TLS != nil {
+	if endpoint.Scheme == "https" && cfg.TLS != nil {
 		tlsConfig := &tls.Config{}
 		if cfg.TLS.InsecureSkipVerify {
 			tlsConfig.InsecureSkipVerify = true
@@ -61,6 +66,34 @@ func loadRootCAs(caCertFile string) (*x509.CertPool, error) {
 	}
 
 	return rootCAs, nil
+}
+
+func validateEndpointForClient(cfg TransportConfig) (*url.URL, error) {
+	endpoint, err := url.Parse(cfg.Endpoint)
+	if err != nil || endpoint.Scheme == "" || endpoint.Host == "" {
+		return nil, fmt.Errorf("invalid endpoint url for '%s' transport", cfg.Type)
+	}
+
+	switch cfg.Type {
+	case "https":
+		if endpoint.Scheme != "https" {
+			return nil, fmt.Errorf("endpoint scheme must be 'https' for https transport")
+		}
+	case "http":
+		if endpoint.Scheme != "http" && endpoint.Scheme != "https" {
+			return nil, fmt.Errorf("endpoint scheme must be 'http' or 'https' for http transport")
+		}
+		if endpoint.Scheme == "http" && !cfg.AllowInsecure {
+			return nil, fmt.Errorf("allow_insecure must be true for http endpoints")
+		}
+		if endpoint.Scheme == "http" && cfg.TLS != nil {
+			return nil, fmt.Errorf("tls configuration is only valid for https endpoints")
+		}
+	default:
+		return nil, fmt.Errorf("unsupported transport type '%s'", cfg.Type)
+	}
+
+	return endpoint, nil
 }
 
 // BuildMCPTransport creates the appropriate MCP client transport based on the

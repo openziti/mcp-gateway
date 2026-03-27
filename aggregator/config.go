@@ -2,6 +2,7 @@ package aggregator
 
 import (
 	"fmt"
+	"net/url"
 	"time"
 
 	"github.com/michaelquigley/df/dd"
@@ -45,11 +46,12 @@ type TransportConfig struct {
 	WorkingDir string
 	// zrok transport fields
 	ShareToken string
-	// https transport fields
-	Endpoint string
-	Protocol string            // "sse" (default) or "streamable"
-	Headers  map[string]string
-	TLS      *TLSConfig
+	// http(s) transport fields
+	Endpoint      string
+	Protocol      string // "sse" (default) or "streamable"
+	Headers       map[string]string
+	AllowInsecure bool
+	TLS           *TLSConfig
 }
 
 // TLSConfig provides optional TLS settings for HTTPS backends.
@@ -134,23 +136,14 @@ func (c *Config) Validate() error {
 					Message: "share_token is required for zrok transport",
 				}
 			}
-		case "https":
-			if b.Transport.Endpoint == "" {
-				return &ConfigError{
-					Field:   fmt.Sprintf("backends[%d].transport.endpoint", i),
-					Message: "endpoint is required for https transport",
-				}
-			}
-			if b.Transport.Protocol != "" && b.Transport.Protocol != "sse" && b.Transport.Protocol != "streamable" {
-				return &ConfigError{
-					Field:   fmt.Sprintf("backends[%d].transport.protocol", i),
-					Message: fmt.Sprintf("unsupported protocol '%s', must be 'sse' or 'streamable'", b.Transport.Protocol),
-				}
+		case "https", "http":
+			if err := validateHTTPTransport(b.Transport, i); err != nil {
+				return err
 			}
 		default:
 			return &ConfigError{
 				Field:   fmt.Sprintf("backends[%d].transport.type", i),
-				Message: fmt.Sprintf("unsupported transport type '%s', must be 'stdio', 'zrok', or 'https'", b.Transport.Type),
+				Message: fmt.Sprintf("unsupported transport type '%s', must be 'stdio', 'zrok', 'https', or 'http'", b.Transport.Type),
 			}
 		}
 
@@ -159,6 +152,61 @@ func (c *Config) Validate() error {
 				Field:   fmt.Sprintf("backends[%d].tools.mode", i),
 				Message: fmt.Sprintf("invalid tool filter mode '%s', must be 'allow' or 'deny'", b.Tools.Mode),
 			}
+		}
+	}
+
+	return nil
+}
+
+func validateHTTPTransport(transport TransportConfig, index int) error {
+	if transport.Endpoint == "" {
+		return &ConfigError{
+			Field:   fmt.Sprintf("backends[%d].transport.endpoint", index),
+			Message: fmt.Sprintf("endpoint is required for %s transport", transport.Type),
+		}
+	}
+
+	endpoint, err := url.Parse(transport.Endpoint)
+	if err != nil || endpoint.Scheme == "" || endpoint.Host == "" {
+		return &ConfigError{
+			Field:   fmt.Sprintf("backends[%d].transport.endpoint", index),
+			Message: fmt.Sprintf("invalid endpoint url for '%s' transport", transport.Type),
+		}
+	}
+
+	switch transport.Type {
+	case "https":
+		if endpoint.Scheme != "https" {
+			return &ConfigError{
+				Field:   fmt.Sprintf("backends[%d].transport.endpoint", index),
+				Message: "endpoint scheme must be 'https' for https transport",
+			}
+		}
+	case "http":
+		if endpoint.Scheme != "http" && endpoint.Scheme != "https" {
+			return &ConfigError{
+				Field:   fmt.Sprintf("backends[%d].transport.endpoint", index),
+				Message: "endpoint scheme must be 'http' or 'https' for http transport",
+			}
+		}
+		if endpoint.Scheme == "http" && !transport.AllowInsecure {
+			return &ConfigError{
+				Field:   fmt.Sprintf("backends[%d].transport.allow_insecure", index),
+				Message: "allow_insecure must be true for http endpoints",
+			}
+		}
+		if endpoint.Scheme == "http" && transport.TLS != nil {
+			return &ConfigError{
+				Field:   fmt.Sprintf("backends[%d].transport.tls", index),
+				Message: "tls configuration is only valid for https endpoints",
+			}
+		}
+	}
+
+	if transport.Protocol != "" && transport.Protocol != "sse" && transport.Protocol != "streamable" {
+		return &ConfigError{
+			Field:   fmt.Sprintf("backends[%d].transport.protocol", index),
+			Message: fmt.Sprintf("unsupported protocol '%s', must be 'sse' or 'streamable'", transport.Protocol),
 		}
 	}
 

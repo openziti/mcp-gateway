@@ -117,8 +117,8 @@ func (cs *ClientSession) connectBackend(ctx context.Context, cfg aggregator.Back
 		return cs.connectStdioBackend(ctx, cfg)
 	case "zrok":
 		return cs.connectZrokBackend(ctx, cfg)
-	case "https":
-		return cs.connectHttpsBackend(ctx, cfg)
+	case "http", "https":
+		return cs.connectHTTPBackend(ctx, cfg)
 	default:
 		return nil, fmt.Errorf("unsupported transport type '%s'", cfg.Transport.Type)
 	}
@@ -206,8 +206,8 @@ func (cs *ClientSession) connectZrokBackend(ctx context.Context, cfg aggregator.
 	}, nil
 }
 
-// connectHttpsBackend creates an HTTP(S) connection to a remote MCP backend.
-func (cs *ClientSession) connectHttpsBackend(ctx context.Context, cfg aggregator.BackendConfig) (*sessionBackend, error) {
+// connectHTTPBackend creates an HTTP(S) connection to a remote MCP backend.
+func (cs *ClientSession) connectHTTPBackend(ctx context.Context, cfg aggregator.BackendConfig) (*sessionBackend, error) {
 	mcpClient := mcp.NewClient(
 		&mcp.Implementation{
 			Name:    cs.config.Aggregator.Name,
@@ -216,7 +216,7 @@ func (cs *ClientSession) connectHttpsBackend(ctx context.Context, cfg aggregator
 		nil,
 	)
 
-	httpClient, err := aggregator.BuildHTTPSClient(cfg.Transport)
+	httpClient, err := aggregator.BuildHTTPClient(cfg.Transport)
 	if err != nil {
 		return nil, fmt.Errorf("failed to build http client: %w", err)
 	}
@@ -232,7 +232,7 @@ func (cs *ClientSession) connectHttpsBackend(ctx context.Context, cfg aggregator
 		return mcpClient.Connect(connectCtx, transport, nil)
 	})
 	if err != nil {
-		return nil, fmt.Errorf("failed to connect to https backend: %w", err)
+		return nil, fmt.Errorf("failed to connect to http backend: %w", err)
 	}
 
 	return &sessionBackend{

@@ -65,8 +65,8 @@ func (m *BackendManager) connectBackend(ctx context.Context, cfg BackendConfig) 
 		return m.connectStdioBackend(ctx, cfg)
 	case "zrok":
 		return m.connectZrokBackend(ctx, cfg)
-	case "https":
-		return m.connectHttpsBackend(ctx, cfg)
+	case "http", "https":
+		return m.connectHTTPBackend(ctx, cfg)
 	default:
 		return nil, fmt.Errorf("unsupported transport type '%s'", cfg.Transport.Type)
 	}
@@ -185,8 +185,8 @@ func (m *BackendManager) connectZrokBackend(ctx context.Context, cfg BackendConf
 	}, nil
 }
 
-// connectHttpsBackend establishes a connection to a remote HTTPS backend.
-func (m *BackendManager) connectHttpsBackend(ctx context.Context, cfg BackendConfig) (*Backend, error) {
+// connectHTTPBackend establishes a connection to a remote HTTP(S) backend.
+func (m *BackendManager) connectHTTPBackend(ctx context.Context, cfg BackendConfig) (*Backend, error) {
 	mcpClient := mcp.NewClient(
 		&mcp.Implementation{
 			Name:    m.config.Aggregator.Name,
@@ -195,7 +195,7 @@ func (m *BackendManager) connectHttpsBackend(ctx context.Context, cfg BackendCon
 		nil,
 	)
 
-	httpClient, err := BuildHTTPSClient(cfg.Transport)
+	httpClient, err := BuildHTTPClient(cfg.Transport)
 	if err != nil {
 		return nil, fmt.Errorf("failed to build http client: %w", err)
 	}
@@ -209,7 +209,7 @@ func (m *BackendManager) connectHttpsBackend(ctx context.Context, cfg BackendCon
 		return mcpClient.Connect(connectCtx, transport, nil)
 	})
 	if err != nil {
-		return nil, fmt.Errorf("failed to connect to https backend: %w", err)
+		return nil, fmt.Errorf("failed to connect to http backend: %w", err)
 	}
 
 	listCtx, cancel := context.WithTimeout(ctx, m.config.Aggregator.Connection.ConnectTimeout)
@@ -218,7 +218,7 @@ func (m *BackendManager) connectHttpsBackend(ctx context.Context, cfg BackendCon
 	toolsResult, err := session.ListTools(listCtx, nil)
 	if err != nil {
 		session.Close()
-		return nil, fmt.Errorf("failed to list tools from https backend: %w", err)
+		return nil, fmt.Errorf("failed to list tools from http backend: %w", err)
 	}
 
 	name := cfg.Name
@@ -226,7 +226,7 @@ func (m *BackendManager) connectHttpsBackend(ctx context.Context, cfg BackendCon
 		name = cfg.ID
 	}
 
-	dl.Log().With("backend", cfg.ID).With("endpoint", cfg.Transport.Endpoint).Info("connected to https backend")
+	dl.Log().With("backend", cfg.ID).With("endpoint", cfg.Transport.Endpoint).With("transport_type", cfg.Transport.Type).Info("connected to http backend")
 
 	return &Backend{
 		id:      cfg.ID,

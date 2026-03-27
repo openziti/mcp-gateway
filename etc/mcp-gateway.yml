@@ -209,6 +209,20 @@ backends:
   #      insecure_skip_verify: true
 
   # ------------------------------------------------------------------------------
+  # example: plaintext HTTP backend (explicit opt-in required)
+  # ------------------------------------------------------------------------------
+  #- id: "local-dev"
+  #  transport:
+  #    # http: connect to an HTTP or HTTPS MCP server endpoint
+  #    type: "http"
+  #
+  #    # full URL of the MCP server endpoint
+  #    endpoint: "http://localhost:8080/sse"
+  #
+  #    # plaintext HTTP requires explicit opt-in
+  #    allow_insecure: true
+
+  # ------------------------------------------------------------------------------
   # example: database server with no filtering
   # ------------------------------------------------------------------------------
   #- id: "postgres"

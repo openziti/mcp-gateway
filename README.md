@@ -140,9 +140,9 @@ backends:
       share_token: "token-from-bridge"
 ```
 
-### Connect to HTTPS MCP Servers
+### Connect to HTTP and HTTPS MCP Servers
 
-Gateway can aggregate remote MCP servers accessible over HTTPS, using either SSE or streamable HTTP transport:
+Gateway can aggregate remote MCP servers over HTTP(S), using either SSE or streamable HTTP transport. `type: https` is strict and only accepts `https://` endpoints. `type: http` supports both `http://` and `https://`, but plaintext HTTP requires explicit opt-in.
 
 ```yaml
 backends:
@@ -163,6 +163,17 @@ backends:
 ```
 
 This works alongside stdio and zrok backends — mix and match as needed.
+
+For local development or trusted internal networks, you can opt into plaintext HTTP explicitly:
+
+```yaml
+backends:
+  - id: local-dev
+    transport:
+      type: http
+      endpoint: "http://localhost:8080/sse"
+      allow_insecure: true
+```
 
 ### Persistent Shares
 

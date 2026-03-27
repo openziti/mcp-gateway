@@ -35,7 +35,9 @@ func TestBuildHTTPSClient_AppendsCustomCAToSystemPool(t *testing.T) {
 	}
 
 	caPath := writeTempCertFile(t, customPEM)
-	client, err := BuildHTTPSClient(TransportConfig{
+	client, err := BuildHTTPClient(TransportConfig{
+		Type:     "https",
+		Endpoint: "https://mcp.example.com/sse",
 		TLS: &TLSConfig{
 			CACertFile: caPath,
 		},
@@ -75,7 +77,9 @@ func TestBuildHTTPSClient_ReturnsSystemCertPoolError(t *testing.T) {
 		return nil, errors.New("boom")
 	}
 
-	_, err := BuildHTTPSClient(TransportConfig{
+	_, err := BuildHTTPClient(TransportConfig{
+		Type:     "https",
+		Endpoint: "https://mcp.example.com/sse",
 		TLS: &TLSConfig{
 			CACertFile: caPath,
 		},
@@ -96,7 +100,9 @@ func TestBuildHTTPSClient_ReturnsParseErrorForInvalidPEM(t *testing.T) {
 	}
 
 	caPath := writeTempCertFile(t, []byte("not a cert"))
-	_, err := BuildHTTPSClient(TransportConfig{
+	_, err := BuildHTTPClient(TransportConfig{
+		Type:     "https",
+		Endpoint: "https://mcp.example.com/sse",
 		TLS: &TLSConfig{
 			CACertFile: caPath,
 		},
@@ -118,7 +124,9 @@ func TestBuildHTTPSClient_SkipsSystemPoolWithoutCustomCA(t *testing.T) {
 		return x509.NewCertPool(), nil
 	}
 
-	client, err := BuildHTTPSClient(TransportConfig{
+	client, err := BuildHTTPClient(TransportConfig{
+		Type:     "https",
+		Endpoint: "https://mcp.example.com/sse",
 		TLS: &TLSConfig{
 			InsecureSkipVerify: true,
 		},
@@ -155,7 +163,9 @@ func TestBuildHTTPSClient_UsesEmptyPoolWhenSystemPoolIsNil(t *testing.T) {
 		return nil, nil
 	}
 
-	client, err := BuildHTTPSClient(TransportConfig{
+	client, err := BuildHTTPClient(TransportConfig{
+		Type:     "https",
+		Endpoint: "https://mcp.example.com/sse",
 		TLS: &TLSConfig{
 			CACertFile: caPath,
 		},
@@ -174,6 +184,52 @@ func TestBuildHTTPSClient_UsesEmptyPoolWhenSystemPoolIsNil(t *testing.T) {
 	}
 	if !containsSubject(rootCAs.Subjects(), customCert.RawSubject) {
 		t.Fatalf("expected custom subject in fallback pool")
+	}
+}
+
+func TestBuildHTTPClient_RejectsPlainHTTPWithoutAllowInsecure(t *testing.T) {
+	_, err := BuildHTTPClient(TransportConfig{
+		Type:     "http",
+		Endpoint: "http://localhost:8080/sse",
+	})
+	if err == nil || err.Error() != "allow_insecure must be true for http endpoints" {
+		t.Fatalf("expected allow_insecure error, got %v", err)
+	}
+}
+
+func TestBuildHTTPClient_AcceptsPlainHTTPWithAllowInsecure(t *testing.T) {
+	client, err := BuildHTTPClient(TransportConfig{
+		Type:          "http",
+		Endpoint:      "http://localhost:8080/sse",
+		AllowInsecure: true,
+	})
+	if err != nil {
+		t.Fatalf("expected success, got %v", err)
+	}
+
+	transport, ok := client.Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("expected *http.Transport, got %T", client.Transport)
+	}
+	if transport.TLSClientConfig != nil {
+		if transport.TLSClientConfig.InsecureSkipVerify {
+			t.Fatalf("expected plain HTTP endpoint to avoid TLS overrides")
+		}
+		if transport.TLSClientConfig.RootCAs != nil {
+			t.Fatalf("expected plain HTTP endpoint to avoid custom root CAs")
+		}
+	}
+}
+
+func TestBuildHTTPClient_RejectsTLSForPlainHTTPEndpoint(t *testing.T) {
+	_, err := BuildHTTPClient(TransportConfig{
+		Type:          "http",
+		Endpoint:      "http://localhost:8080/sse",
+		AllowInsecure: true,
+		TLS:           &TLSConfig{},
+	})
+	if err == nil || err.Error() != "tls configuration is only valid for https endpoints" {
+		t.Fatalf("expected tls validation error, got %v", err)
 	}
 }
 
