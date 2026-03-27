@@ -10,6 +10,8 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
+var systemCertPool = x509.SystemCertPool
+
 // BuildHTTPSClient creates an http.Client configured with TLS and header injection
 // for connecting to HTTPS MCP backends.
 func BuildHTTPSClient(cfg TransportConfig) (*http.Client, error) {
@@ -21,15 +23,11 @@ func BuildHTTPSClient(cfg TransportConfig) (*http.Client, error) {
 			tlsConfig.InsecureSkipVerify = true
 		}
 		if cfg.TLS.CACertFile != "" {
-			caCert, err := os.ReadFile(cfg.TLS.CACertFile)
+			rootCAs, err := loadRootCAs(cfg.TLS.CACertFile)
 			if err != nil {
-				return nil, fmt.Errorf("failed to read ca cert file '%s': %w", cfg.TLS.CACertFile, err)
+				return nil, err
 			}
-			caCertPool := x509.NewCertPool()
-			if !caCertPool.AppendCertsFromPEM(caCert) {
-				return nil, fmt.Errorf("failed to parse ca cert from '%s'", cfg.TLS.CACertFile)
-			}
-			tlsConfig.RootCAs = caCertPool
+			tlsConfig.RootCAs = rootCAs
 		}
 		transport.TLSClientConfig = tlsConfig
 	}
@@ -43,6 +41,26 @@ func BuildHTTPSClient(cfg TransportConfig) (*http.Client, error) {
 	}
 
 	return &http.Client{Transport: rt}, nil
+}
+
+func loadRootCAs(caCertFile string) (*x509.CertPool, error) {
+	caCert, err := os.ReadFile(caCertFile)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read ca cert file '%s': %w", caCertFile, err)
+	}
+
+	rootCAs, err := systemCertPool()
+	if err != nil {
+		return nil, fmt.Errorf("failed to load system ca pool: %w", err)
+	}
+	if rootCAs == nil {
+		rootCAs = x509.NewCertPool()
+	}
+	if !rootCAs.AppendCertsFromPEM(caCert) {
+		return nil, fmt.Errorf("failed to parse ca cert from '%s'", caCertFile)
+	}
+
+	return rootCAs, nil
 }
 
 // BuildMCPTransport creates the appropriate MCP client transport based on the
