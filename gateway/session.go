@@ -187,11 +187,11 @@ func (cs *ClientSession) connectZrokBackend(ctx context.Context, cfg aggregator.
 		HTTPClient: access.HTTPClient(),
 	}
 
-	// for SSE transports, the context controls the HTTP connection lifetime.
-	// we use the session context (ctx) directly rather than a timeout context,
-	// because cancelling the context closes the SSE connection.
-	// the connect timeout is enforced by the HTTP client's dial timeout instead.
-	session, err := mcpClient.Connect(ctx, sseTransport, nil)
+	// bound the initial connect window without attaching the timeout to the
+	// long-lived session itself.
+	session, err := aggregator.ConnectWithTimeout(ctx, cs.config.Aggregator.Connection.ConnectTimeout, func(connectCtx context.Context) (*mcp.ClientSession, error) {
+		return mcpClient.Connect(connectCtx, sseTransport, nil)
+	})
 	if err != nil {
 		access.Close()
 		return nil, fmt.Errorf("failed to connect to zrok backend: %w", err)
@@ -226,10 +226,11 @@ func (cs *ClientSession) connectHttpsBackend(ctx context.Context, cfg aggregator
 		return nil, fmt.Errorf("failed to build mcp transport: %w", err)
 	}
 
-	// for HTTP-based transports, the context controls the connection lifetime.
-	// we use the session context directly rather than a timeout context,
-	// because cancelling the context closes the connection.
-	session, err := mcpClient.Connect(ctx, transport, nil)
+	// bound the initial connect window without attaching the timeout to the
+	// long-lived session itself.
+	session, err := aggregator.ConnectWithTimeout(ctx, cs.config.Aggregator.Connection.ConnectTimeout, func(connectCtx context.Context) (*mcp.ClientSession, error) {
+		return mcpClient.Connect(connectCtx, transport, nil)
+	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to https backend: %w", err)
 	}

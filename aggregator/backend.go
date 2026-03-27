@@ -147,15 +147,21 @@ func (m *BackendManager) connectZrokBackend(ctx context.Context, cfg BackendConf
 		HTTPClient: access.HTTPClient(),
 	}
 
-	// connect to backend
-	session, err := mcpClient.Connect(ctx, sseTransport, nil)
+	// bound the initial connect window without binding the timeout to the
+	// long-lived session itself.
+	session, err := ConnectWithTimeout(ctx, m.config.Aggregator.Connection.ConnectTimeout, func(connectCtx context.Context) (*mcp.ClientSession, error) {
+		return mcpClient.Connect(connectCtx, sseTransport, nil)
+	})
 	if err != nil {
 		access.Close()
 		return nil, fmt.Errorf("failed to connect to zrok backend: %w", err)
 	}
 
 	// discover tools from backend
-	toolsResult, err := session.ListTools(ctx, nil)
+	listCtx, cancel := context.WithTimeout(ctx, m.config.Aggregator.Connection.ConnectTimeout)
+	defer cancel()
+
+	toolsResult, err := session.ListTools(listCtx, nil)
 	if err != nil {
 		session.Close()
 		access.Close()
@@ -199,12 +205,17 @@ func (m *BackendManager) connectHttpsBackend(ctx context.Context, cfg BackendCon
 		return nil, fmt.Errorf("failed to build mcp transport: %w", err)
 	}
 
-	session, err := mcpClient.Connect(ctx, transport, nil)
+	session, err := ConnectWithTimeout(ctx, m.config.Aggregator.Connection.ConnectTimeout, func(connectCtx context.Context) (*mcp.ClientSession, error) {
+		return mcpClient.Connect(connectCtx, transport, nil)
+	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to https backend: %w", err)
 	}
 
-	toolsResult, err := session.ListTools(ctx, nil)
+	listCtx, cancel := context.WithTimeout(ctx, m.config.Aggregator.Connection.ConnectTimeout)
+	defer cancel()
+
+	toolsResult, err := session.ListTools(listCtx, nil)
 	if err != nil {
 		session.Close()
 		return nil, fmt.Errorf("failed to list tools from https backend: %w", err)
