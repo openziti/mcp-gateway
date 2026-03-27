@@ -21,6 +21,7 @@ flowchart LR
     A[Agent] -->|stdio| B[mcp-tools]
     B -->|zrok| C[mcp-gateway]
     C -->|stdio| D[MCP Servers]
+    C -->|https| E[Remote MCP APIs]
 ```
 
 ## Why?
@@ -137,6 +138,41 @@ backends:
     transport:
       type: zrok
       share_token: "token-from-bridge"
+```
+
+### Connect to HTTP and HTTPS MCP Servers
+
+Gateway can aggregate remote MCP servers over HTTP(S), using either SSE or streamable HTTP transport. `type: https` is strict and only accepts `https://` endpoints. `type: http` supports both `http://` and `https://`, but plaintext HTTP requires explicit opt-in.
+
+```yaml
+backends:
+  - id: remote-api
+    transport:
+      type: https
+      endpoint: "https://mcp.example.com/sse"
+      headers:
+        Authorization: "Bearer sk-abc123"
+
+  - id: internal-api
+    transport:
+      type: https
+      endpoint: "https://mcp.internal.corp/mcp"
+      protocol: "streamable"
+      tls:
+        ca_cert_file: "/etc/ssl/certs/internal-ca.pem"
+```
+
+This works alongside stdio and zrok backends — mix and match as needed.
+
+For local development or trusted internal networks, you can opt into plaintext HTTP explicitly:
+
+```yaml
+backends:
+  - id: local-dev
+    transport:
+      type: http
+      endpoint: "http://localhost:8080/sse"
+      allow_insecure: true
 ```
 
 ### Persistent Shares

@@ -65,6 +65,8 @@ func (m *BackendManager) connectBackend(ctx context.Context, cfg BackendConfig) 
 		return m.connectStdioBackend(ctx, cfg)
 	case "zrok":
 		return m.connectZrokBackend(ctx, cfg)
+	case "http", "https":
+		return m.connectHTTPBackend(ctx, cfg)
 	default:
 		return nil, fmt.Errorf("unsupported transport type '%s'", cfg.Transport.Type)
 	}
@@ -145,15 +147,21 @@ func (m *BackendManager) connectZrokBackend(ctx context.Context, cfg BackendConf
 		HTTPClient: access.HTTPClient(),
 	}
 
-	// connect to backend
-	session, err := mcpClient.Connect(ctx, sseTransport, nil)
+	// bound the initial connect window without binding the timeout to the
+	// long-lived session itself.
+	session, err := ConnectWithTimeout(ctx, m.config.Aggregator.Connection.ConnectTimeout, func(connectCtx context.Context) (*mcp.ClientSession, error) {
+		return mcpClient.Connect(connectCtx, sseTransport, nil)
+	})
 	if err != nil {
 		access.Close()
 		return nil, fmt.Errorf("failed to connect to zrok backend: %w", err)
 	}
 
 	// discover tools from backend
-	toolsResult, err := session.ListTools(ctx, nil)
+	listCtx, cancel := context.WithTimeout(ctx, m.config.Aggregator.Connection.ConnectTimeout)
+	defer cancel()
+
+	toolsResult, err := session.ListTools(listCtx, nil)
 	if err != nil {
 		session.Close()
 		access.Close()
@@ -174,6 +182,41 @@ func (m *BackendManager) connectZrokBackend(ctx context.Context, cfg BackendConf
 		session: session,
 		tools:   toolsResult.Tools,
 		access:  access,
+	}, nil
+}
+
+// connectHTTPBackend establishes a connection to a remote HTTP(S) backend.
+func (m *BackendManager) connectHTTPBackend(ctx context.Context, cfg BackendConfig) (*Backend, error) {
+	connected, err := ConnectHTTPClientSession(ctx, &mcp.Implementation{
+		Name:    m.config.Aggregator.Name,
+		Version: m.config.Aggregator.Version,
+	}, cfg.Transport, m.config.Aggregator.Connection.ConnectTimeout)
+	if err != nil {
+		return nil, err
+	}
+
+	listCtx, cancel := context.WithTimeout(ctx, m.config.Aggregator.Connection.ConnectTimeout)
+	defer cancel()
+
+	toolsResult, err := connected.Session.ListTools(listCtx, nil)
+	if err != nil {
+		connected.Session.Close()
+		return nil, fmt.Errorf("failed to list tools from http backend: %w", err)
+	}
+
+	name := cfg.Name
+	if name == "" {
+		name = cfg.ID
+	}
+
+	dl.Log().With("backend", cfg.ID).With("endpoint", cfg.Transport.Endpoint).With("transport_type", cfg.Transport.Type).Info("connected to http backend")
+
+	return &Backend{
+		id:      cfg.ID,
+		name:    name,
+		client:  connected.Client,
+		session: connected.Session,
+		tools:   toolsResult.Tools,
 	}, nil
 }
 

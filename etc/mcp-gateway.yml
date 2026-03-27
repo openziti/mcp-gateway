@@ -155,6 +155,74 @@ backends:
   #      - "*"  # allow all tools from this backend
 
   # ------------------------------------------------------------------------------
+  # example: remote HTTPS backend (SSE transport, default)
+  # ------------------------------------------------------------------------------
+  #- id: "remote-api"
+  #  name: "Remote MCP API"
+  #
+  #  transport:
+  #    # https: connect to a remote MCP server over HTTPS
+  #    type: "https"
+  #
+  #    # full URL of the MCP server endpoint
+  #    endpoint: "https://mcp.example.com/sse"
+  #
+  #    # protocol: "sse" (default) or "streamable"
+  #    # sse: legacy SSE transport (most common)
+  #    # streamable: newer streamable HTTP transport
+  #    #protocol: "sse"
+  #
+  #    # custom headers sent with every request (e.g., auth tokens)
+  #    headers:
+  #      Authorization: "Bearer sk-abc123"
+  #
+  #  tools:
+  #    mode: "allow"
+  #    list:
+  #      - "*"
+
+  # ------------------------------------------------------------------------------
+  # example: remote HTTPS backend (streamable HTTP transport)
+  # ------------------------------------------------------------------------------
+  #- id: "streamable-api"
+  #  transport:
+  #    type: "https"
+  #    endpoint: "https://mcp.internal.corp/mcp"
+  #    protocol: "streamable"
+  #    headers:
+  #      Authorization: "Bearer sk-xyz789"
+  #
+  #    # optional TLS overrides
+  #    tls:
+  #      # path to custom CA certificate (for internal CAs)
+  #      ca_cert_file: "/etc/ssl/certs/internal-ca.pem"
+
+  # ------------------------------------------------------------------------------
+  # example: HTTPS backend with insecure TLS (development only)
+  # ------------------------------------------------------------------------------
+  #- id: "dev-server"
+  #  transport:
+  #    type: "https"
+  #    endpoint: "https://localhost:8443/sse"
+  #    tls:
+  #      # skip TLS certificate verification (development only!)
+  #      insecure_skip_verify: true
+
+  # ------------------------------------------------------------------------------
+  # example: plaintext HTTP backend (explicit opt-in required)
+  # ------------------------------------------------------------------------------
+  #- id: "local-dev"
+  #  transport:
+  #    # http: connect to an HTTP or HTTPS MCP server endpoint
+  #    type: "http"
+  #
+  #    # full URL of the MCP server endpoint
+  #    endpoint: "http://localhost:8080/sse"
+  #
+  #    # plaintext HTTP requires explicit opt-in
+  #    allow_insecure: true
+
+  # ------------------------------------------------------------------------------
   # example: database server with no filtering
   # ------------------------------------------------------------------------------
   #- id: "postgres"

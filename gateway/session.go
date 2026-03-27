@@ -117,6 +117,8 @@ func (cs *ClientSession) connectBackend(ctx context.Context, cfg aggregator.Back
 		return cs.connectStdioBackend(ctx, cfg)
 	case "zrok":
 		return cs.connectZrokBackend(ctx, cfg)
+	case "http", "https":
+		return cs.connectHTTPBackend(ctx, cfg)
 	default:
 		return nil, fmt.Errorf("unsupported transport type '%s'", cfg.Transport.Type)
 	}
@@ -185,11 +187,11 @@ func (cs *ClientSession) connectZrokBackend(ctx context.Context, cfg aggregator.
 		HTTPClient: access.HTTPClient(),
 	}
 
-	// for SSE transports, the context controls the HTTP connection lifetime.
-	// we use the session context (ctx) directly rather than a timeout context,
-	// because cancelling the context closes the SSE connection.
-	// the connect timeout is enforced by the HTTP client's dial timeout instead.
-	session, err := mcpClient.Connect(ctx, sseTransport, nil)
+	// bound the initial connect window without attaching the timeout to the
+	// long-lived session itself.
+	session, err := aggregator.ConnectWithTimeout(ctx, cs.config.Aggregator.Connection.ConnectTimeout, func(connectCtx context.Context) (*mcp.ClientSession, error) {
+		return mcpClient.Connect(connectCtx, sseTransport, nil)
+	})
 	if err != nil {
 		access.Close()
 		return nil, fmt.Errorf("failed to connect to zrok backend: %w", err)
@@ -201,6 +203,24 @@ func (cs *ClientSession) connectZrokBackend(ctx context.Context, cfg aggregator.
 		client:  mcpClient,
 		session: session,
 		access:  access,
+	}, nil
+}
+
+// connectHTTPBackend creates an HTTP(S) connection to a remote MCP backend.
+func (cs *ClientSession) connectHTTPBackend(ctx context.Context, cfg aggregator.BackendConfig) (*sessionBackend, error) {
+	connected, err := aggregator.ConnectHTTPClientSession(ctx, &mcp.Implementation{
+		Name:    cs.config.Aggregator.Name,
+		Version: cs.config.Aggregator.Version,
+	}, cfg.Transport, cs.config.Aggregator.Connection.ConnectTimeout)
+	if err != nil {
+		return nil, err
+	}
+
+	return &sessionBackend{
+		id:      cfg.ID,
+		cfg:     cfg,
+		client:  connected.Client,
+		session: connected.Session,
 	}, nil
 }
 
