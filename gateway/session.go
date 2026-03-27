@@ -208,38 +208,19 @@ func (cs *ClientSession) connectZrokBackend(ctx context.Context, cfg aggregator.
 
 // connectHTTPBackend creates an HTTP(S) connection to a remote MCP backend.
 func (cs *ClientSession) connectHTTPBackend(ctx context.Context, cfg aggregator.BackendConfig) (*sessionBackend, error) {
-	mcpClient := mcp.NewClient(
-		&mcp.Implementation{
-			Name:    cs.config.Aggregator.Name,
-			Version: cs.config.Aggregator.Version,
-		},
-		nil,
-	)
-
-	httpClient, err := aggregator.BuildHTTPClient(cfg.Transport)
+	connected, err := aggregator.ConnectHTTPClientSession(ctx, &mcp.Implementation{
+		Name:    cs.config.Aggregator.Name,
+		Version: cs.config.Aggregator.Version,
+	}, cfg.Transport, cs.config.Aggregator.Connection.ConnectTimeout)
 	if err != nil {
-		return nil, fmt.Errorf("failed to build http client: %w", err)
-	}
-
-	transport, err := aggregator.BuildMCPTransport(cfg.Transport, httpClient)
-	if err != nil {
-		return nil, fmt.Errorf("failed to build mcp transport: %w", err)
-	}
-
-	// bound the initial connect window without attaching the timeout to the
-	// long-lived session itself.
-	session, err := aggregator.ConnectWithTimeout(ctx, cs.config.Aggregator.Connection.ConnectTimeout, func(connectCtx context.Context) (*mcp.ClientSession, error) {
-		return mcpClient.Connect(connectCtx, transport, nil)
-	})
-	if err != nil {
-		return nil, fmt.Errorf("failed to connect to http backend: %w", err)
+		return nil, err
 	}
 
 	return &sessionBackend{
 		id:      cfg.ID,
 		cfg:     cfg,
-		client:  mcpClient,
-		session: session,
+		client:  connected.Client,
+		session: connected.Session,
 	}, nil
 }
 

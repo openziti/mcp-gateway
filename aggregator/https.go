@@ -1,17 +1,26 @@
 package aggregator
 
 import (
+	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"fmt"
 	"net/http"
 	"net/url"
 	"os"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 var systemCertPool = x509.SystemCertPool
+
+// HTTPClientSession groups the reusable client/session pair for a connected
+// HTTP(S) backend.
+type HTTPClientSession struct {
+	Client  *mcp.Client
+	Session *mcp.ClientSession
+}
 
 // BuildHTTPClient creates an http.Client configured with TLS and header injection
 // for connecting to HTTP(S) MCP backends.
@@ -118,6 +127,34 @@ func BuildMCPTransport(cfg TransportConfig, httpClient *http.Client) (mcp.Transp
 	default:
 		return nil, fmt.Errorf("unsupported protocol '%s'", protocol)
 	}
+}
+
+// ConnectHTTPClientSession creates and connects an MCP client/session pair for
+// an HTTP(S) backend using the shared timeout-wrapped connect flow.
+func ConnectHTTPClientSession(ctx context.Context, impl *mcp.Implementation, cfg TransportConfig, connectTimeout time.Duration) (*HTTPClientSession, error) {
+	mcpClient := mcp.NewClient(impl, nil)
+
+	httpClient, err := BuildHTTPClient(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("failed to build http client: %w", err)
+	}
+
+	transport, err := BuildMCPTransport(cfg, httpClient)
+	if err != nil {
+		return nil, fmt.Errorf("failed to build mcp transport: %w", err)
+	}
+
+	session, err := ConnectWithTimeout(ctx, connectTimeout, func(connectCtx context.Context) (*mcp.ClientSession, error) {
+		return mcpClient.Connect(connectCtx, transport, nil)
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to connect to http backend: %w", err)
+	}
+
+	return &HTTPClientSession{
+		Client:  mcpClient,
+		Session: session,
+	}, nil
 }
 
 // headerRoundTripper injects custom headers into every HTTP request.

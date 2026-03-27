@@ -187,37 +187,20 @@ func (m *BackendManager) connectZrokBackend(ctx context.Context, cfg BackendConf
 
 // connectHTTPBackend establishes a connection to a remote HTTP(S) backend.
 func (m *BackendManager) connectHTTPBackend(ctx context.Context, cfg BackendConfig) (*Backend, error) {
-	mcpClient := mcp.NewClient(
-		&mcp.Implementation{
-			Name:    m.config.Aggregator.Name,
-			Version: m.config.Aggregator.Version,
-		},
-		nil,
-	)
-
-	httpClient, err := BuildHTTPClient(cfg.Transport)
+	connected, err := ConnectHTTPClientSession(ctx, &mcp.Implementation{
+		Name:    m.config.Aggregator.Name,
+		Version: m.config.Aggregator.Version,
+	}, cfg.Transport, m.config.Aggregator.Connection.ConnectTimeout)
 	if err != nil {
-		return nil, fmt.Errorf("failed to build http client: %w", err)
-	}
-
-	transport, err := BuildMCPTransport(cfg.Transport, httpClient)
-	if err != nil {
-		return nil, fmt.Errorf("failed to build mcp transport: %w", err)
-	}
-
-	session, err := ConnectWithTimeout(ctx, m.config.Aggregator.Connection.ConnectTimeout, func(connectCtx context.Context) (*mcp.ClientSession, error) {
-		return mcpClient.Connect(connectCtx, transport, nil)
-	})
-	if err != nil {
-		return nil, fmt.Errorf("failed to connect to http backend: %w", err)
+		return nil, err
 	}
 
 	listCtx, cancel := context.WithTimeout(ctx, m.config.Aggregator.Connection.ConnectTimeout)
 	defer cancel()
 
-	toolsResult, err := session.ListTools(listCtx, nil)
+	toolsResult, err := connected.Session.ListTools(listCtx, nil)
 	if err != nil {
-		session.Close()
+		connected.Session.Close()
 		return nil, fmt.Errorf("failed to list tools from http backend: %w", err)
 	}
 
@@ -231,8 +214,8 @@ func (m *BackendManager) connectHTTPBackend(ctx context.Context, cfg BackendConf
 	return &Backend{
 		id:      cfg.ID,
 		name:    name,
-		client:  mcpClient,
-		session: session,
+		client:  connected.Client,
+		session: connected.Session,
 		tools:   toolsResult.Tools,
 	}, nil
 }
