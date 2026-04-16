@@ -349,8 +349,8 @@ github.com/openziti/secretstream v0.1.39 h1:icmwdUwXvyrXxReBLNQ97zfLz6d1Mv01QWB9
 github.com/openziti/secretstream v0.1.39/go.mod h1:2BkpTHWsTcLeBWToCXzeAogUiGLIrQibx4QXrlhzVrM=
 github.com/openziti/transport/v2 v2.0.194 h1:BXyPiXcbWyf/5SJ3vWfjvWn+QmtsBDfxbbQRfPcXB0A=
 github.com/openziti/transport/v2 v2.0.194/go.mod h1:M1npHTjV8nyLwf50XhH59eVBDfWxroavUP9DLsF7Ta0=
-github.com/openziti/zrok/v2 v2.0.0-rc7 h1:JXv1GEyK2w5G4mk/HnJvVtvbU7aJh6CSBgbkAMS6JkY=
-github.com/openziti/zrok/v2 v2.0.0-rc7/go.mod h1:lqc0djVvpgbQouPyWif4nqdez0rW5U5fdaahXlJ41pQ=
+github.com/openziti/zrok/v2 v2.0.1 h1:w5A1Vv5CiVqTHS6aV1eN6C4LNTS+i2mscS92TiKnLvY=
+github.com/openziti/zrok/v2 v2.0.1/go.mod h1:hxSCu84eZHqGGEc5EUhgEXtoYBFL8/51x3GkH3JY4go=
 github.com/orcaman/concurrent-map/v2 v2.0.1 h1:jOJ5Pg2w1oeB6PeDurIYf6k9PQ+aTITr/6lP/L/zp6c=
 github.com/orcaman/concurrent-map/v2 v2.0.1/go.mod h1:9Eq3TG2oBe5FirmYWQfYO5iH1q0Jv47PLaNK++uCdOM=
 github.com/parallaxsecond/parsec-client-go v0.0.0-20221025095442-f0a77d263cf9 h1:mOvehYivJ4Aqu2CPe3D3lv8jhqOI9/1o0THxJHBE0qw=
