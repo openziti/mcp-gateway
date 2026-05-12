@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -82,6 +83,28 @@ func TestValidateAcceptsAgoraBackendWhenAgoraEnabled(t *testing.T) {
 
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("expected success, got %v", err)
+	}
+}
+
+func TestDemoMCPGatewayConfigEnablesAgoraPublishing(t *testing.T) {
+	cfg, err := LoadConfig(filepath.Join("..", "etc", "demo-mcp-gateway.yml"))
+	if err != nil {
+		t.Fatalf("LoadConfig returned error: %v", err)
+	}
+	if cfg.ZrokShareEnabled() {
+		t.Fatalf("demo config should disable zrok sharing: %#v", cfg.Zrok)
+	}
+	if !cfg.AgoraServeEnabled() {
+		t.Fatalf("demo config should enable agora serving: %#v", cfg.Agora)
+	}
+	if cfg.Agora == nil || cfg.Agora.Advertisement == nil || cfg.Agora.Advertisement.Publish == nil || !*cfg.Agora.Advertisement.Publish {
+		t.Fatalf("demo config must explicitly enable agora advertisement publishing: %#v", cfg.Agora)
+	}
+	if len(cfg.Backends) != 1 || cfg.Backends[0].ID != "filesystem" {
+		t.Fatalf("unexpected demo backends: %#v", cfg.Backends)
+	}
+	if cfg.Backends[0].Transport.Type != "stdio" || cfg.Backends[0].Transport.Command != "mcp-filesystem" {
+		t.Fatalf("unexpected demo backend transport: %#v", cfg.Backends[0].Transport)
 	}
 }
 

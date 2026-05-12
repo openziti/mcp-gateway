@@ -1,0 +1,44 @@
+# mcp-gateway config for the Agora dashboard demo.
+#
+# Agora's demo-bootstrap writes the account/env-specific values to:
+#   <env_root>/integration.mcp-gateway.yaml
+#
+# The demo launcher should run this config with:
+#   AGORA_MCP_GATEWAY_INTEGRATION_FILE=<env_root>/integration.mcp-gateway.yaml \
+#     mcp-gateway run --network=agora etc/demo-mcp-gateway.yml
+
+zrok:
+  share:
+    enabled: false
+
+agora:
+  enabled: true
+  instance_name: "mcp-gateway"
+  description: "MCP Gateway demo"
+  tunnel_mode: "tcp"
+  serve:
+    enabled: true
+  advertisement:
+    publish: true
+
+aggregator:
+  name: "mcp-gateway"
+  version: "1.0.0"
+  separator: ":"
+  connection:
+    connect_timeout: 30s
+    call_timeout: 60s
+
+backends:
+  - id: "filesystem"
+    name: "Demo Filesystem"
+    transport:
+      type: "stdio"
+      command: "mcp-filesystem"
+      args:
+        - "/tmp"
+    tools:
+      mode: "allow"
+      list:
+        - "read_file"
+        - "list_directory"
