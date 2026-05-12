@@ -3,6 +3,7 @@ package aggregator
 import (
 	"fmt"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/michaelquigley/df/dd"
@@ -46,6 +47,8 @@ type TransportConfig struct {
 	WorkingDir string
 	// zrok transport fields
 	ShareToken string
+	// agora transport fields
+	AgoraTunnel string
 	// http(s) transport fields
 	Endpoint      string
 	Protocol      string // "sse" (default) or "streamable"
@@ -136,6 +139,10 @@ func (c *Config) Validate() error {
 					Message: "share_token is required for zrok transport",
 				}
 			}
+		case "agora":
+			if err := validateAgoraTransport(b.Transport, i); err != nil {
+				return err
+			}
 		case "https", "http":
 			if err := validateHTTPTransport(b.Transport, i); err != nil {
 				return err
@@ -143,7 +150,7 @@ func (c *Config) Validate() error {
 		default:
 			return &ConfigError{
 				Field:   fmt.Sprintf("backends[%d].transport.type", i),
-				Message: fmt.Sprintf("unsupported transport type '%s', must be 'stdio', 'zrok', 'https', or 'http'", b.Transport.Type),
+				Message: fmt.Sprintf("unsupported transport type '%s', must be 'stdio', 'zrok', 'agora', 'https', or 'http'", b.Transport.Type),
 			}
 		}
 
@@ -152,6 +159,26 @@ func (c *Config) Validate() error {
 				Field:   fmt.Sprintf("backends[%d].tools.mode", i),
 				Message: fmt.Sprintf("invalid tool filter mode '%s', must be 'allow' or 'deny'", b.Tools.Mode),
 			}
+		}
+	}
+
+	return nil
+}
+
+func validateAgoraTransport(transport TransportConfig, index int) error {
+	if strings.TrimSpace(transport.AgoraTunnel) == "" {
+		return &ConfigError{
+			Field:   fmt.Sprintf("backends[%d].transport.agora_tunnel", index),
+			Message: "agora_tunnel is required for agora transport",
+		}
+	}
+
+	if transport.Command != "" || len(transport.Args) > 0 || len(transport.Env) > 0 || transport.WorkingDir != "" ||
+		transport.ShareToken != "" || transport.Endpoint != "" || transport.Protocol != "" || len(transport.Headers) > 0 ||
+		transport.AllowInsecure || transport.TLS != nil {
+		return &ConfigError{
+			Field:   fmt.Sprintf("backends[%d].transport", index),
+			Message: "agora transport cannot set stdio, zrok, or http transport fields",
 		}
 	}
 

@@ -101,6 +101,10 @@ func (c *Config) Validate() error {
 		return err
 	}
 
+	if c.hasAgoraBackends() && (c.Agora == nil || !c.Agora.Enabled) {
+		return &ConfigError{Field: "agora.enabled", Message: "agora transport backends require agora.enabled"}
+	}
+
 	return nil
 }
 
@@ -128,6 +132,18 @@ func (c *Config) AgoraServeEnabled() bool {
 // AgoraPublishEnabled reports whether the gateway should publish to the Agora catalog.
 func (c *Config) AgoraPublishEnabled() bool {
 	return c != nil && c.Agora != nil && c.Agora.Enabled && agora.AdvertisementPublish(c.Agora)
+}
+
+func (c *Config) hasAgoraBackends() bool {
+	if c == nil {
+		return false
+	}
+	for _, backend := range c.Backends {
+		if backend.Transport.Type == "agora" {
+			return true
+		}
+	}
+	return false
 }
 
 // ConfigError represents a configuration validation error.

@@ -56,6 +56,7 @@ type ClientSession struct {
 	client    *ClientContext
 	config    *Config
 	namespace *aggregator.Namespace
+	resolver  aggregator.ConnectResolver
 	backends  map[string]*sessionBackend
 	ctx       context.Context
 	cancel    context.CancelFunc
@@ -75,7 +76,7 @@ type sessionBackend struct {
 
 // NewClientSession creates an isolated session with connections to all backends.
 // the session will be cleaned up when ctx is cancelled.
-func NewClientSession(ctx context.Context, config *Config, namespace *aggregator.Namespace, client *ClientContext) (*ClientSession, error) {
+func NewClientSession(ctx context.Context, config *Config, namespace *aggregator.Namespace, client *ClientContext, resolver aggregator.ConnectResolver) (*ClientSession, error) {
 	sessionCtx, cancel := context.WithCancel(ctx)
 
 	cs := &ClientSession{
@@ -84,6 +85,7 @@ func NewClientSession(ctx context.Context, config *Config, namespace *aggregator
 		client:    client,
 		config:    config,
 		namespace: namespace,
+		resolver:  resolver,
 		backends:  make(map[string]*sessionBackend),
 		ctx:       sessionCtx,
 		cancel:    cancel,
@@ -117,6 +119,8 @@ func (cs *ClientSession) connectBackend(ctx context.Context, cfg aggregator.Back
 		return cs.connectStdioBackend(ctx, cfg)
 	case "zrok":
 		return cs.connectZrokBackend(ctx, cfg)
+	case "agora":
+		return cs.connectAgoraBackend(ctx, cfg)
 	case "http", "https":
 		return cs.connectHTTPBackend(ctx, cfg)
 	default:
@@ -203,6 +207,45 @@ func (cs *ClientSession) connectZrokBackend(ctx context.Context, cfg aggregator.
 		client:  mcpClient,
 		session: session,
 		access:  access,
+	}, nil
+}
+
+// connectAgoraBackend creates an Agora-backed SSE connection.
+func (cs *ClientSession) connectAgoraBackend(ctx context.Context, cfg aggregator.BackendConfig) (*sessionBackend, error) {
+	if cs.resolver == nil {
+		return nil, fmt.Errorf("agora connect resolver is not configured")
+	}
+	loopbackAddr, ok := cs.resolver(cfg.ID)
+	if !ok || strings.TrimSpace(loopbackAddr) == "" {
+		return nil, fmt.Errorf("agora connect address for backend '%s' was not initialized", cfg.ID)
+	}
+	loopbackAddr = strings.TrimSpace(loopbackAddr)
+
+	mcpClient := mcp.NewClient(
+		&mcp.Implementation{
+			Name:    cs.config.Aggregator.Name,
+			Version: cs.config.Aggregator.Version,
+		},
+		nil,
+	)
+
+	sseTransport := &mcp.SSEClientTransport{
+		Endpoint:   "http://" + loopbackAddr + "/sse",
+		HTTPClient: http.DefaultClient,
+	}
+
+	session, err := aggregator.ConnectWithTimeout(ctx, cs.config.Aggregator.Connection.ConnectTimeout, func(connectCtx context.Context) (*mcp.ClientSession, error) {
+		return mcpClient.Connect(connectCtx, sseTransport, nil)
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to connect to agora backend: %w", err)
+	}
+
+	return &sessionBackend{
+		id:      cfg.ID,
+		cfg:     cfg,
+		client:  mcpClient,
+		session: session,
 	}, nil
 }
 

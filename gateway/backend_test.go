@@ -69,3 +69,29 @@ func TestGatewayCapabilityExtrasSortsBackendIDsAndAddsServeTag(t *testing.T) {
 		}
 	}
 }
+
+func TestCollectAgoraConnectTargets(t *testing.T) {
+	targets := collectAgoraConnectTargets([]aggregator.BackendConfig{
+		{
+			ID: "filesystem",
+			Transport: aggregator.TransportConfig{
+				Type:        "agora",
+				AgoraTunnel: " filesystem-relay ",
+			},
+		},
+		{
+			ID: "github",
+			Transport: aggregator.TransportConfig{
+				Type:       "zrok",
+				ShareToken: "share",
+			},
+		},
+	})
+
+	if len(targets) != 1 {
+		t.Fatalf("targets = %#v", targets)
+	}
+	if targets[0].Key != "filesystem" || targets[0].Tunnel != "filesystem-relay" {
+		t.Fatalf("unexpected target: %#v", targets[0])
+	}
+}

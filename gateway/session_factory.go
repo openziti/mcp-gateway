@@ -14,6 +14,7 @@ type SessionFactory struct {
 	config    *Config
 	namespace *aggregator.Namespace
 	impl      *mcp.Implementation
+	resolver  aggregator.ConnectResolver
 
 	mu       sync.Mutex
 	sessions map[string]*ClientSession
@@ -21,10 +22,11 @@ type SessionFactory struct {
 
 // NewSessionFactory creates a factory for client sessions.
 // the namespace should be pre-populated with all available tools from backends.
-func NewSessionFactory(config *Config, namespace *aggregator.Namespace) *SessionFactory {
+func NewSessionFactory(config *Config, namespace *aggregator.Namespace, resolver aggregator.ConnectResolver) *SessionFactory {
 	return &SessionFactory{
 		config:    config,
 		namespace: namespace,
+		resolver:  resolver,
 		impl: &mcp.Implementation{
 			Name:    config.Aggregator.Name,
 			Version: config.Aggregator.Version,
@@ -36,7 +38,7 @@ func NewSessionFactory(config *Config, namespace *aggregator.Namespace) *Session
 // CreateSession creates a new isolated session with connections to all backends.
 // the caller is responsible for calling session.Close() when done.
 func (f *SessionFactory) CreateSession(ctx context.Context, client *ClientContext) (*ClientSession, error) {
-	session, err := NewClientSession(ctx, f.config, f.namespace, client)
+	session, err := NewClientSession(ctx, f.config, f.namespace, client, f.resolver)
 	if err != nil {
 		return nil, err
 	}

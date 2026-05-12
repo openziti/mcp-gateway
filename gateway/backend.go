@@ -21,17 +21,18 @@ import (
 
 // Backend manages the lifecycle of a zrok share serving MCP with per-client sessions.
 type Backend struct {
-	config         *Config
-	namespace      *aggregator.Namespace
-	sessionFactory *SessionFactory
-	share          *Share
-	httpServer     *http.Server
-	agoraServer    *http.Server
-	agoraListener  net.Listener
-	agoraSubsystem *mcpagora.Subsystem
-	ipcClient      *ipc.Client
-	ipcCancel      context.CancelFunc
-	mainCtx        context.Context // stored for reconnection callback
+	config          *Config
+	namespace       *aggregator.Namespace
+	sessionFactory  *SessionFactory
+	share           *Share
+	httpServer      *http.Server
+	agoraServer     *http.Server
+	agoraListener   net.Listener
+	agoraSubsystem  *mcpagora.Subsystem
+	connectResolver aggregator.ConnectResolver
+	ipcClient       *ipc.Client
+	ipcCancel       context.CancelFunc
+	mainCtx         context.Context // stored for reconnection callback
 }
 
 // New creates a Backend from config.
@@ -61,8 +62,33 @@ func (b *Backend) Start(ctx context.Context) (err error) {
 		}
 	}()
 
+	if b.config.Agora != nil && b.config.Agora.Enabled {
+		subsys, err := mcpagora.NewSubsystem(mcpagora.SubsystemOptions{
+			Config: b.config.Agora,
+			Defaults: mcpagora.Defaults{
+				InstanceName:       "mcp-gateway",
+				Description:        "MCP tool gateway",
+				TunnelMode:         "tcp",
+				AgentNamePrefix:    "mcp-gateway",
+				AllowedTunnelModes: []string{"tcp", "http"},
+			},
+			Capabilities:   mcpagora.Derive([]string{"mcp-tools"}, gatewayCapabilityExtras(b.config)),
+			ConnectTargets: collectAgoraConnectTargets(b.config.Backends),
+			ServeWanted:    b.config.AgoraServeEnabled(),
+			PublishWanted:  b.config.AgoraPublishEnabled(),
+		})
+		if err != nil {
+			return err
+		}
+		b.agoraSubsystem = subsys
+		if err := b.agoraSubsystem.BootstrapConnects(ctx); err != nil {
+			return err
+		}
+		b.connectResolver = b.agoraSubsystem.ConnectAddress
+	}
+
 	// discover tools from backends (temporary connections)
-	namespace, err := b.discoverTools(ctx)
+	namespace, err := b.discoverTools(ctx, b.connectResolver)
 	if err != nil {
 		return fmt.Errorf("failed to discover tools: %w", err)
 	}
@@ -71,7 +97,7 @@ func (b *Backend) Start(ctx context.Context) (err error) {
 	dl.Log().With("tool_count", namespace.Count()).Info("discovered tools from backends")
 
 	// create session factory with namespace
-	b.sessionFactory = NewSessionFactory(b.config, namespace)
+	b.sessionFactory = NewSessionFactory(b.config, namespace, b.connectResolver)
 
 	// create or connect to zrok share
 	if b.config.ZrokShareEnabled() {
@@ -104,29 +130,6 @@ func (b *Backend) Start(ctx context.Context) (err error) {
 		}
 		b.agoraListener = listener
 		b.agoraServer = &http.Server{Handler: handler}
-	}
-
-	if b.config.Agora != nil && b.config.Agora.Enabled {
-		subsys, err := mcpagora.NewSubsystem(mcpagora.SubsystemOptions{
-			Config: b.config.Agora,
-			Defaults: mcpagora.Defaults{
-				InstanceName:       "mcp-gateway",
-				Description:        "MCP tool gateway",
-				TunnelMode:         "tcp",
-				AgentNamePrefix:    "mcp-gateway",
-				AllowedTunnelModes: []string{"tcp", "http"},
-			},
-			Capabilities:  mcpagora.Derive([]string{"mcp-tools"}, gatewayCapabilityExtras(b.config)),
-			ServeWanted:   b.config.AgoraServeEnabled(),
-			PublishWanted: b.config.AgoraPublishEnabled(),
-		})
-		if err != nil {
-			return err
-		}
-		b.agoraSubsystem = subsys
-		if err := b.agoraSubsystem.BootstrapConnects(ctx); err != nil {
-			return err
-		}
 	}
 
 	// connect to orchestrator if configured (managed mode)
@@ -200,7 +203,7 @@ func (b *Backend) startHeartbeatAndShutdownListener() {
 
 // discoverTools connects to all backends temporarily to discover available tools.
 // the connections are closed after discovery; per-client sessions will reconnect.
-func (b *Backend) discoverTools(ctx context.Context) (*aggregator.Namespace, error) {
+func (b *Backend) discoverTools(ctx context.Context, resolver aggregator.ConnectResolver) (*aggregator.Namespace, error) {
 	// create aggregator config from our embedded config
 	aggCfg := &aggregator.Config{
 		Aggregator: b.config.Aggregator,
@@ -209,6 +212,7 @@ func (b *Backend) discoverTools(ctx context.Context) (*aggregator.Namespace, err
 
 	// create backend manager for discovery
 	backends := aggregator.NewBackendManager(aggCfg)
+	backends.SetConnectResolver(resolver)
 
 	// connect to all backends
 	if err := backends.Connect(ctx); err != nil {
@@ -438,6 +442,20 @@ func gatewayCapabilityExtras(cfg *Config) []string {
 		extras = append(extras, "agora-serve")
 	}
 	return extras
+}
+
+func collectAgoraConnectTargets(backends []aggregator.BackendConfig) []mcpagora.ConnectTarget {
+	targets := make([]mcpagora.ConnectTarget, 0)
+	for _, backend := range backends {
+		if backend.Transport.Type != "agora" {
+			continue
+		}
+		targets = append(targets, mcpagora.ConnectTarget{
+			Key:    strings.TrimSpace(backend.ID),
+			Tunnel: strings.TrimSpace(backend.Transport.AgoraTunnel),
+		})
+	}
+	return targets
 }
 
 // ShareToken returns the share token after Start().
