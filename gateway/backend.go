@@ -4,13 +4,17 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/michaelquigley/df/dd"
 	"github.com/michaelquigley/df/dl"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/openziti/mcp-gateway/aggregator"
+	mcpagora "github.com/openziti/mcp-gateway/agora"
 	"github.com/openziti/mcp-gateway/gateway/ipc"
 	"github.com/openziti/mcp-gateway/model"
 )
@@ -22,6 +26,9 @@ type Backend struct {
 	sessionFactory *SessionFactory
 	share          *Share
 	httpServer     *http.Server
+	agoraServer    *http.Server
+	agoraListener  net.Listener
+	agoraSubsystem *mcpagora.Subsystem
 	ipcClient      *ipc.Client
 	ipcCancel      context.CancelFunc
 	mainCtx        context.Context // stored for reconnection callback
@@ -44,8 +51,15 @@ func NewFromFile(path string) (*Backend, error) {
 }
 
 // Start initializes the namespace, session factory, creates/connects zrok share, and outputs token.
-func (b *Backend) Start(ctx context.Context) error {
+func (b *Backend) Start(ctx context.Context) (err error) {
 	dl.Log().Info("starting mcp-gateway")
+	defer func() {
+		if err != nil {
+			if stopErr := b.Stop(); stopErr != nil {
+				dl.Log().With("error", stopErr).Warn("failed to clean up after start error")
+			}
+		}
+	}()
 
 	// discover tools from backends (temporary connections)
 	namespace, err := b.discoverTools(ctx)
@@ -60,27 +74,63 @@ func (b *Backend) Start(ctx context.Context) error {
 	b.sessionFactory = NewSessionFactory(b.config, namespace)
 
 	// create or connect to zrok share
-	var share *Share
-	if b.config.ShareToken != "" {
-		// managed mode: connect to existing share created by orchestrator
-		share, err = NewShareFromToken(b.config.ShareToken)
-		if err != nil {
-			return fmt.Errorf("failed to connect to share '%s': %w", b.config.ShareToken, err)
+	if b.config.ZrokShareEnabled() {
+		var share *Share
+		if b.config.ShareToken != "" {
+			// managed mode: connect to existing share created by orchestrator
+			share, err = NewShareFromToken(b.config.ShareToken)
+			if err != nil {
+				return fmt.Errorf("failed to connect to share '%s': %w", b.config.ShareToken, err)
+			}
+		} else {
+			// standalone mode: create new share
+			share, err = NewShare()
+			if err != nil {
+				return fmt.Errorf("failed to create share: %w", err)
+			}
 		}
-	} else {
-		// standalone mode: create new share
-		share, err = NewShare()
+		b.share = share
+	}
+
+	handler := b.createHTTPHandler()
+	if b.share != nil {
+		b.httpServer = &http.Server{Handler: handler}
+	}
+
+	if b.config.AgoraServeEnabled() {
+		listener, err := net.Listen("tcp", "127.0.0.1:0")
 		if err != nil {
-			return fmt.Errorf("failed to create share: %w", err)
+			return fmt.Errorf("failed to create agora listener: %w", err)
+		}
+		b.agoraListener = listener
+		b.agoraServer = &http.Server{Handler: handler}
+	}
+
+	if b.config.Agora != nil && b.config.Agora.Enabled {
+		subsys, err := mcpagora.NewSubsystem(mcpagora.SubsystemOptions{
+			Config: b.config.Agora,
+			Defaults: mcpagora.Defaults{
+				InstanceName:       "mcp-gateway",
+				Description:        "MCP tool gateway",
+				TunnelMode:         "tcp",
+				AgentNamePrefix:    "mcp-gateway",
+				AllowedTunnelModes: []string{"tcp", "http"},
+			},
+			Capabilities:  mcpagora.Derive([]string{"mcp-tools"}, gatewayCapabilityExtras(b.config)),
+			ServeWanted:   b.config.AgoraServeEnabled(),
+			PublishWanted: b.config.AgoraPublishEnabled(),
+		})
+		if err != nil {
+			return err
+		}
+		b.agoraSubsystem = subsys
+		if err := b.agoraSubsystem.BootstrapConnects(ctx); err != nil {
+			return err
 		}
 	}
-	b.share = share
-
-	// create HTTP server with per-request session factory
-	b.httpServer = b.createHTTPServer()
 
 	// connect to orchestrator if configured (managed mode)
-	if b.config.Orchestrator != nil && b.config.ShareToken != "" {
+	if b.config.Orchestrator != nil && b.config.ShareToken != "" && b.share != nil {
 		b.mainCtx = ctx
 
 		ipcCfg := &ipc.Config{
@@ -88,7 +138,7 @@ func (b *Backend) Start(ctx context.Context) error {
 			HeartbeatInterval: b.config.Orchestrator.HeartbeatInterval,
 			ReconnectInterval: 5 * time.Second, // fixed reconnect interval for local socket
 		}
-		b.ipcClient = ipc.NewClient(share.Token(), ipcCfg)
+		b.ipcClient = ipc.NewClient(b.share.Token(), ipcCfg)
 
 		// set up reconnection callback to restart heartbeat and shutdown listener
 		b.ipcClient.OnReconnect = func() {
@@ -115,14 +165,17 @@ func (b *Backend) Start(ctx context.Context) error {
 		}
 	}
 
-	// output share token to stdout for orchestrator capture (useful in standalone mode)
-	if json, err := dd.UnbindJSON(&model.TokenOutput{ShareToken: share.Token()}); err == nil {
-		fmt.Println(string(json))
-	} else {
-		dl.Log().With("error", err).Info("failed to unbind token")
+	if b.share != nil {
+		// output share token to stdout for orchestrator capture (useful in standalone mode)
+		if json, err := dd.UnbindJSON(&model.TokenOutput{ShareToken: b.share.Token()}); err == nil {
+			fmt.Println(string(json))
+		} else {
+			dl.Log().With("error", err).Info("failed to unbind token")
+		}
+		dl.Log().With("share_token", b.share.Token()).Info("mcp-gateway zrok share ready")
 	}
 
-	dl.Log().With("share_token", share.Token()).Info("mcp-gateway started")
+	dl.Log().Info("mcp-gateway started")
 	return nil
 }
 
@@ -180,9 +233,9 @@ func (b *Backend) discoverTools(ctx context.Context) (*aggregator.Namespace, err
 	return namespace, nil
 }
 
-// createHTTPServer creates an HTTP server that spawns per-client sessions.
-func (b *Backend) createHTTPServer() *http.Server {
-	handler := mcp.NewSSEHandler(func(r *http.Request) *mcp.Server {
+// createHTTPHandler creates an HTTP handler that spawns per-client sessions.
+func (b *Backend) createHTTPHandler() http.Handler {
+	return mcp.NewSSEHandler(func(r *http.Request) *mcp.Server {
 		// extract client context from HTTP request
 		client := NewClientContext(r)
 
@@ -202,34 +255,62 @@ func (b *Backend) createHTTPServer() *http.Server {
 
 		return session.CreateMCPServer(b.sessionFactory.Implementation())
 	}, nil)
+}
 
+// createHTTPServer creates an HTTP server that spawns per-client sessions.
+func (b *Backend) createHTTPServer() *http.Server {
 	return &http.Server{
-		Handler: handler,
+		Handler: b.createHTTPHandler(),
 	}
 }
 
-// Run serves MCP over the zrok share.
+// Run serves MCP over the configured network listeners.
 // this blocks until the context is cancelled.
 func (b *Backend) Run(ctx context.Context) error {
-	dl.Log().Info("serving mcp over zrok share")
+	dl.Log().Info("serving mcp-gateway")
 
-	// serve in a goroutine so we can handle context cancellation
-	errCh := make(chan error, 1)
-	go func() {
-		err := b.httpServer.Serve(b.share.Listener())
-		if errors.Is(err, http.ErrServerClosed) {
-			errCh <- nil
-		} else {
-			errCh <- err
+	errCh := make(chan error, 2)
+	var servers []*http.Server
+
+	if b.httpServer != nil && b.share != nil {
+		servers = append(servers, b.httpServer)
+		serveHTTP(b.httpServer, b.share.Listener(), errCh, "zrok")
+		dl.Log().Info("serving mcp over zrok share")
+	}
+
+	if b.agoraServer != nil && b.agoraListener != nil {
+		servers = append(servers, b.agoraServer)
+		serveHTTP(b.agoraServer, b.agoraListener, errCh, "agora")
+		dl.Log().With("listen", b.agoraListener.Addr().String()).Info("serving mcp for agora tunnel")
+	}
+
+	if len(servers) == 0 {
+		return fmt.Errorf("no gateway listeners are configured")
+	}
+
+	if b.agoraSubsystem != nil {
+		if b.config.AgoraServeEnabled() {
+			target := b.agoraServeBackendTarget()
+			if err := b.agoraSubsystem.StartServing(ctx, target); err != nil {
+				shutdownHTTPServers(servers)
+				return err
+			}
 		}
-	}()
+		if b.config.AgoraPublishEnabled() {
+			if err := b.agoraSubsystem.StartPublishing(ctx); err != nil {
+				shutdownHTTPServers(servers)
+				return err
+			}
+		}
+	}
 
 	// wait for context cancellation or server error
 	select {
 	case <-ctx.Done():
 		dl.Log().Info("context cancelled, shutting down")
-		return b.httpServer.Shutdown(context.Background())
+		return shutdownHTTPServers(servers)
 	case err := <-errCh:
+		shutdownHTTPServers(servers)
 		return err
 	}
 }
@@ -253,6 +334,27 @@ func (b *Backend) Stop() error {
 	if b.httpServer != nil {
 		if err := b.httpServer.Shutdown(context.Background()); err != nil {
 			dl.Log().With("error", err).Warn("error shutting down server")
+			lastErr = err
+		}
+	}
+
+	if b.agoraServer != nil {
+		if err := b.agoraServer.Shutdown(context.Background()); err != nil {
+			dl.Log().With("error", err).Warn("error shutting down agora server")
+			lastErr = err
+		}
+	}
+
+	if b.agoraListener != nil {
+		if err := b.agoraListener.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
+			dl.Log().With("error", err).Warn("error closing agora listener")
+			lastErr = err
+		}
+	}
+
+	if b.agoraSubsystem != nil {
+		if err := b.agoraSubsystem.Close(); err != nil {
+			dl.Log().With("error", err).Warn("error closing agora subsystem")
 			lastErr = err
 		}
 	}
@@ -281,6 +383,61 @@ func (b *Backend) Stop() error {
 
 	dl.Log().Info("mcp-gateway stopped")
 	return lastErr
+}
+
+func serveHTTP(server *http.Server, listener net.Listener, errCh chan<- error, label string) {
+	go func() {
+		err := server.Serve(listener)
+		if err == nil || errors.Is(err, http.ErrServerClosed) || errors.Is(err, net.ErrClosed) {
+			errCh <- nil
+			return
+		}
+		errCh <- fmt.Errorf("%s listener failed: %w", label, err)
+	}()
+}
+
+func shutdownHTTPServers(servers []*http.Server) error {
+	var errs []error
+	for _, server := range servers {
+		if err := server.Shutdown(context.Background()); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
+}
+
+func (b *Backend) agoraServeBackendTarget() string {
+	if b.agoraListener == nil {
+		return ""
+	}
+
+	address := b.agoraListener.Addr().String()
+	mode := "tcp"
+	if b.config != nil && b.config.Agora != nil && strings.TrimSpace(b.config.Agora.TunnelMode) != "" {
+		mode = strings.ToLower(strings.TrimSpace(b.config.Agora.TunnelMode))
+	}
+	if mode == "http" {
+		return "http://" + address
+	}
+	return address
+}
+
+func gatewayCapabilityExtras(cfg *Config) []string {
+	if cfg == nil {
+		return nil
+	}
+
+	extras := make([]string, 0, len(cfg.Backends)+1)
+	for _, backend := range cfg.Backends {
+		if strings.TrimSpace(backend.ID) != "" {
+			extras = append(extras, strings.TrimSpace(backend.ID))
+		}
+	}
+	sort.Strings(extras)
+	if cfg.AgoraServeEnabled() {
+		extras = append(extras, "agora-serve")
+	}
+	return extras
 }
 
 // ShareToken returns the share token after Start().
