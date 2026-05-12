@@ -2,7 +2,7 @@
 
 **Zero-trust access to MCP tools over OpenZiti**
 
-MCP Gateway lets AI assistants securely access internal tools without exposing public endpoints. Built on OpenZiti and zrok, it provides cryptographically secure, zero trust connectivity with no attack surface.
+MCP Gateway lets AI assistants securely access internal tools without exposing public endpoints. Built on OpenZiti, zrok, and Agora, it provides cryptographically secure, zero trust connectivity with no attack surface.
 
 MCP Gateway is sponsored by [NetFoundry](https://netfoundry.io) as part of its portfolio of solutions for secure workloads and agentic computing. NetFoundry is the creator of [OpenZiti](https://netfoundry.io/docs/openziti/) and [zrok](https://netfoundry.io/docs/zrok/getting-started).
 
@@ -12,15 +12,15 @@ Three simple components that work together:
 
 | Component | Purpose |
 |-----------|---------|
-| **mcp-tools** | Connects MCP clients to remote shares (stdio or HTTP), manages persistent shares |
-| **mcp-gateway** | Aggregates multiple backends into one secure endpoint (SSE/HTTP) |
-| **mcp-bridge** | Exposes a single MCP server to the network (SSE/HTTP) |
+| **mcp-tools** | Connects MCP clients to remote zrok shares or Agora tunnels (stdio or HTTP) |
+| **mcp-gateway** | Aggregates multiple backends into one secure endpoint over zrok and/or Agora |
+| **mcp-bridge** | Exposes a single MCP server to the network over zrok or Agora |
 
 ```mermaid
 flowchart LR
     A[Agent] -->|stdio| B[mcp-tools]
-    B -->|zrok| C[mcp-gateway]
-    C -->|stdio| D[MCP Servers]
+    B -->|zrok or Agora| C[mcp-gateway]
+    C -->|stdio / zrok / Agora / HTTP| D[MCP Servers]
     C -->|https| E[Remote MCP APIs]
 ```
 
@@ -32,6 +32,7 @@ flowchart LR
 - Never listen on public IPs
 - Require cryptographic identity to access
 - Work through NATs and firewalls without port forwarding
+- Can publish and serve through Agora catalogs and Layer 1 tunnels
 - Are incredibly simple to deploy securely
 
 ## Quick Start
@@ -140,6 +141,31 @@ backends:
       share_token: "token-from-bridge"
 ```
 
+### Serve and Discover Through Agora
+
+Gateway, bridge, and tools can use Agora Layer 1 tunnels in addition to zrok. A gateway can serve over zrok and Agora at the same time, publish a catalog advertisement, and connect to backends exposed by `mcp-bridge --network=agora`.
+
+```yaml
+agora:
+  enabled: true
+  serve:
+    enabled: true
+  advertisement:
+    publish: true
+
+backends:
+  - id: remote-filesystem
+    transport:
+      type: agora
+      agora_tunnel: filesystem-relay
+```
+
+```bash
+mcp-tools run --agora mcp-gateway-engineering
+```
+
+See [Agora Integration](docs/agora.md) for configuration, CLI flags, integration files, and smoke scenarios.
+
 ### Connect to HTTP and HTTPS MCP Servers
 
 Gateway can aggregate remote MCP servers over HTTP(S), using either SSE or streamable HTTP transport. `type: https` is strict and only accepts `https://` endpoints. `type: http` supports both `http://` and `https://`, but plaintext HTTP requires explicit opt-in.
@@ -211,6 +237,9 @@ All components support HTTP-based MCP transport in addition to stdio.
 ```bash
 # expose a zrok share as a local HTTP server
 mcp-tools http <share_token> --bind 127.0.0.1:8080
+
+# expose an Agora tunnel as a local HTTP server
+mcp-tools http --agora <tunnel> --bind 127.0.0.1:8080
 ```
 
 Options:
@@ -282,6 +311,7 @@ go build ./cmd/mcp-tools
 ## Documentation
 
 - [Example Configuration](etc/mcp-gateway.yml) - Fully documented configuration file
+- [Agora Integration](docs/agora.md) - Agora serving, backend connects, mcp-tools dialing, and smoke scenarios
 - [OpenZiti Documentation](https://openziti.io/docs)
 - [zrok Documentation](https://docs.zrok.io)
 - [MCP Specification](https://modelcontextprotocol.io)
