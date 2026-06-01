@@ -4,19 +4,23 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"os/signal"
 	"syscall"
 
 	"github.com/michaelquigley/df/dl"
+	mcpagora "github.com/openziti/mcp-gateway/agora"
 	"github.com/openziti/mcp-gateway/bridge"
 	"github.com/openziti/mcp-gateway/build"
 	"github.com/spf13/cobra"
 )
 
 var (
-	env        []string
-	workingDir string
-	shareToken string
+	env                  []string
+	workingDir           string
+	shareToken           string
+	network              string
+	agoraIntegrationFile string
 )
 
 var rootCmd = &cobra.Command{
@@ -33,6 +37,8 @@ func init() {
 	rootCmd.Flags().StringArrayVar(&env, "env", nil, "environment variables in KEY=VALUE format (can be specified multiple times)")
 	rootCmd.Flags().StringVar(&workingDir, "working-dir", "", "working directory for the command")
 	rootCmd.Flags().StringVar(&shareToken, "share-token", "", "pre-created zrok share token (managed mode)")
+	rootCmd.Flags().StringVar(&network, "network", "", "network shortcut: zrok or agora")
+	rootCmd.Flags().StringVar(&agoraIntegrationFile, "agora-integration-file", "", "path to Agora integration file (overrides config)")
 }
 
 type bridgeRunner interface {
@@ -70,6 +76,13 @@ func run(_ *cobra.Command, args []string) (retErr error) {
 		ShareToken: shareToken,
 	}
 
+	if err := applyOverrides(cfg); err != nil {
+		return err
+	}
+	if err := mcpagora.ResolveConfig(cfg.Agora); err != nil {
+		return err
+	}
+
 	b, err := newBridgeRunner(cfg)
 	if err != nil {
 		return fmt.Errorf("failed to create bridge: %w", err)
@@ -90,6 +103,48 @@ func run(_ *cobra.Command, args []string) (retErr error) {
 
 	if err := b.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
 		return fmt.Errorf("run failed: %w", err)
+	}
+
+	return nil
+}
+
+func applyOverrides(cfg *bridge.Config) error {
+	if network != "" && network != "zrok" && network != "agora" {
+		return fmt.Errorf("invalid --network value '%s' (expected 'zrok' or 'agora')", network)
+	}
+
+	if network == "agora" {
+		if cfg.Agora == nil {
+			cfg.Agora = &mcpagora.Config{}
+		}
+		cfg.Agora.Enabled = true
+		if cfg.Agora.Serve == nil {
+			cfg.Agora.Serve = &mcpagora.ServeConfig{}
+		}
+		cfg.Agora.Serve.Enabled = true
+		if cfg.Agora.Advertisement == nil {
+			cfg.Agora.Advertisement = &mcpagora.AdvertisementConfig{}
+		}
+		publish := true
+		cfg.Agora.Advertisement.Publish = &publish
+		if cfg.Zrok == nil {
+			cfg.Zrok = &bridge.ZrokConfig{}
+		}
+		if cfg.Zrok.Share == nil {
+			cfg.Zrok.Share = &bridge.ZrokShareConfig{}
+		}
+		cfg.Zrok.Share.Enabled = false
+	}
+
+	integrationFile := agoraIntegrationFile
+	if integrationFile == "" {
+		integrationFile = os.Getenv("AGORA_MCP_BRIDGE_INTEGRATION_FILE")
+	}
+	if integrationFile != "" {
+		if cfg.Agora == nil {
+			cfg.Agora = &mcpagora.Config{}
+		}
+		cfg.Agora.IntegrationFile = integrationFile
 	}
 
 	return nil

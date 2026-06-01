@@ -8,6 +8,7 @@ import (
 	"os/signal"
 
 	"github.com/michaelquigley/df/dl"
+	mcpagora "github.com/openziti/mcp-gateway/agora"
 	"github.com/openziti/mcp-gateway/gateway"
 	"github.com/spf13/cobra"
 )
@@ -20,7 +21,9 @@ func init() {
 }
 
 type runCommand struct {
-	cmd *cobra.Command
+	cmd                  *cobra.Command
+	network              string
+	agoraIntegrationFile string
 }
 
 type gatewayRunner interface {
@@ -29,20 +32,22 @@ type gatewayRunner interface {
 	Stop() error
 }
 
-var loadGatewayConfig = gateway.LoadConfig
+var loadGatewayConfig = gateway.LoadConfigRaw
 
 var newGatewayRunner = func(cfg *gateway.Config) (gatewayRunner, error) {
 	return gateway.New(cfg)
 }
 
 func newRunCommand() *runCommand {
-	cmd := &cobra.Command{
+	cobraCmd := &cobra.Command{
 		Use:   "run <configPath>",
 		Short: "Run the MCP gateway",
 		Args:  cobra.ExactArgs(1),
 	}
-	command := &runCommand{cmd: cmd}
-	cmd.RunE = command.run
+	command := &runCommand{cmd: cobraCmd}
+	cobraCmd.Flags().StringVar(&command.network, "network", "", "network shortcut: zrok or agora")
+	cobraCmd.Flags().StringVar(&command.agoraIntegrationFile, "agora-integration-file", "", "path to Agora integration file (overrides config)")
+	cobraCmd.RunE = command.run
 	return command
 }
 
@@ -56,6 +61,16 @@ func (cmd *runCommand) run(_ *cobra.Command, args []string) (retErr error) {
 	cfg, err := loadGatewayConfig(configPath)
 	if err != nil {
 		return fmt.Errorf("failed to load config: %w", err)
+	}
+
+	if err := cmd.applyOverrides(cfg); err != nil {
+		return err
+	}
+	if err := mcpagora.ResolveConfig(cfg.Agora); err != nil {
+		return err
+	}
+	if err := cfg.Validate(); err != nil {
+		return err
 	}
 
 	// if log file is specified, redirect logging to it with JSON format
@@ -97,6 +112,32 @@ func (cmd *runCommand) run(_ *cobra.Command, args []string) (retErr error) {
 
 	if err := b.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
 		return fmt.Errorf("run failed: %w", err)
+	}
+
+	return nil
+}
+
+func (cmd *runCommand) applyOverrides(cfg *gateway.Config) error {
+	if cmd.network != "" && cmd.network != "zrok" && cmd.network != "agora" {
+		return fmt.Errorf("invalid --network value '%s' (expected 'zrok' or 'agora')", cmd.network)
+	}
+
+	if cmd.network == "agora" {
+		if cfg.Agora == nil {
+			cfg.Agora = &mcpagora.Config{}
+		}
+		cfg.Agora.Enabled = true
+	}
+
+	agoraIntegrationFile := cmd.agoraIntegrationFile
+	if agoraIntegrationFile == "" {
+		agoraIntegrationFile = os.Getenv("AGORA_MCP_GATEWAY_INTEGRATION_FILE")
+	}
+	if agoraIntegrationFile != "" {
+		if cfg.Agora == nil {
+			cfg.Agora = &mcpagora.Config{}
+		}
+		cfg.Agora.IntegrationFile = agoraIntegrationFile
 	}
 
 	return nil

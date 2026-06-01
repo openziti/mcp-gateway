@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"syscall"
@@ -17,6 +19,7 @@ import (
 	"github.com/michaelquigley/df/dd"
 	"github.com/michaelquigley/df/dl"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	mcpagora "github.com/openziti/mcp-gateway/agora"
 	"github.com/openziti/mcp-gateway/gateway"
 	"github.com/openziti/mcp-gateway/model"
 )
@@ -24,12 +27,15 @@ import (
 // Bridge wraps a single stdio MCP server and exposes it via zrok.
 // each incoming client gets its own subprocess for full isolation.
 type Bridge struct {
-	cfg        *Config
-	tools      []*mcp.Tool // discovered at startup (immutable)
-	share      *gateway.Share
-	httpServer *http.Server
-	mu         sync.Mutex
-	sessions   map[string]*bridgeSession
+	cfg            *Config
+	tools          []*mcp.Tool // discovered at startup (immutable)
+	share          *gateway.Share
+	httpServer     *http.Server
+	agoraServer    *http.Server
+	agoraListener  net.Listener
+	agoraSubsystem *mcpagora.Subsystem
+	mu             sync.Mutex
+	sessions       map[string]*bridgeSession
 }
 
 // bridgeSession represents one client's connection to a dedicated backend subprocess.
@@ -56,9 +62,16 @@ func New(cfg *Config) (*Bridge, error) {
 	}, nil
 }
 
-// Start discovers tools from a temporary backend, creates zrok share, and outputs token.
-func (b *Bridge) Start(ctx context.Context) error {
+// Start discovers tools from a temporary backend, creates network listeners, and outputs tokens.
+func (b *Bridge) Start(ctx context.Context) (err error) {
 	dl.Log().With("command", b.cfg.Command).Info("starting mcp-bridge")
+	defer func() {
+		if err != nil {
+			if stopErr := b.Stop(); stopErr != nil {
+				dl.Log().With("error", stopErr).Warn("failed to clean up after start error")
+			}
+		}
+	}()
 
 	// discover tools from a temporary backend
 	tools, err := b.discoverTools(ctx)
@@ -69,29 +82,65 @@ func (b *Bridge) Start(ctx context.Context) error {
 
 	dl.Log().With("tool_count", len(tools)).Info("discovered tools from backend")
 
-	// create or connect to zrok share
-	var share *gateway.Share
-	if b.cfg.ShareToken != "" {
-		share, err = gateway.NewShareFromToken(b.cfg.ShareToken)
-	} else {
-		share, err = gateway.NewShare()
-	}
-	if err != nil {
-		return fmt.Errorf("failed to create share: %w", err)
-	}
-	b.share = share
+	handler := b.createHTTPHandler()
 
-	// create HTTP server with per-request subprocess spawning
-	b.httpServer = b.createHTTPServer()
-
-	// output share token to stdout
-	if json, err := dd.UnbindJSON(&model.TokenOutput{ShareToken: share.Token()}); err == nil {
-		fmt.Println(string(json))
-	} else {
-		dl.Log().With("error", err).Warn("failed to unbind share token")
+	if b.cfg.ZrokShareEnabled() {
+		var share *gateway.Share
+		if b.cfg.ShareToken != "" {
+			share, err = gateway.NewShareFromToken(b.cfg.ShareToken)
+		} else {
+			share, err = gateway.NewShare()
+		}
+		if err != nil {
+			return fmt.Errorf("failed to create share: %w", err)
+		}
+		b.share = share
+		b.httpServer = &http.Server{Handler: handler}
 	}
 
-	dl.Log().With("share_token", share.Token()).Info("mcp-bridge started")
+	if b.cfg.AgoraServeEnabled() {
+		listener, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			return fmt.Errorf("failed to create agora listener: %w", err)
+		}
+		b.agoraListener = listener
+		b.agoraServer = &http.Server{Handler: handler}
+	}
+
+	if b.cfg.Agora != nil && b.cfg.Agora.Enabled {
+		subsys, err := mcpagora.NewSubsystem(mcpagora.SubsystemOptions{
+			Config: b.cfg.Agora,
+			Defaults: mcpagora.Defaults{
+				InstanceName:       "mcp-bridge",
+				Description:        "MCP single-server bridge",
+				TunnelMode:         "tcp",
+				AgentNamePrefix:    "mcp-bridge",
+				AllowedTunnelModes: []string{"tcp", "http"},
+			},
+			Capabilities:  mcpagora.Derive([]string{"mcp-tools"}, bridgeCapabilityExtras(b.cfg)),
+			ServeWanted:   b.cfg.AgoraServeEnabled(),
+			PublishWanted: b.cfg.AgoraPublishEnabled(),
+		})
+		if err != nil {
+			return err
+		}
+		b.agoraSubsystem = subsys
+		if err := b.agoraSubsystem.BootstrapConnects(ctx); err != nil {
+			return err
+		}
+	}
+
+	if b.share != nil {
+		// output share token to stdout
+		if json, err := dd.UnbindJSON(&model.TokenOutput{ShareToken: b.share.Token()}); err == nil {
+			fmt.Println(string(json))
+		} else {
+			dl.Log().With("error", err).Warn("failed to unbind share token")
+		}
+		dl.Log().With("share_token", b.share.Token()).Info("mcp-bridge zrok share ready")
+	}
+
+	dl.Log().Info("mcp-bridge started")
 	return nil
 }
 
@@ -139,9 +188,9 @@ func (b *Bridge) discoverTools(ctx context.Context) ([]*mcp.Tool, error) {
 	return toolsResult.Tools, nil
 }
 
-// createHTTPServer creates an HTTP server that spawns per-client subprocesses.
-func (b *Bridge) createHTTPServer() *http.Server {
-	handler := mcp.NewSSEHandler(func(r *http.Request) *mcp.Server {
+// createHTTPHandler creates an HTTP handler that spawns per-client subprocesses.
+func (b *Bridge) createHTTPHandler() http.Handler {
+	return mcp.NewSSEHandler(func(r *http.Request) *mcp.Server {
 		// spawn new subprocess for this client
 		session, err := b.createBridgeSession(r.Context(), r.RemoteAddr, r.Header.Get("User-Agent"))
 		if err != nil {
@@ -157,9 +206,12 @@ func (b *Bridge) createHTTPServer() *http.Server {
 
 		return session.createProxyServer(b.tools)
 	}, nil)
+}
 
+// createHTTPServer creates an HTTP server that spawns per-client subprocesses.
+func (b *Bridge) createHTTPServer() *http.Server {
 	return &http.Server{
-		Handler: handler,
+		Handler: b.createHTTPHandler(),
 	}
 }
 
@@ -331,28 +383,53 @@ func (bs *bridgeSession) Close() error {
 	return errors.Join(errs...)
 }
 
-// Run serves MCP over the zrok share.
+// Run serves MCP over the configured network listener.
 // this blocks until the context is cancelled.
 func (b *Bridge) Run(ctx context.Context) error {
-	dl.Log().Info("serving MCP over zrok share")
+	dl.Log().Info("serving mcp-bridge")
 
-	// serve in a goroutine so we can handle context cancellation
-	errCh := make(chan error, 1)
-	go func() {
-		err := b.httpServer.Serve(b.share.Listener())
-		if errors.Is(err, http.ErrServerClosed) {
-			errCh <- nil
-		} else {
-			errCh <- err
+	errCh := make(chan error, 2)
+	var servers []*http.Server
+
+	if b.httpServer != nil && b.share != nil {
+		servers = append(servers, b.httpServer)
+		serveHTTP(b.httpServer, b.share.Listener(), errCh, "zrok")
+		dl.Log().Info("serving mcp over zrok share")
+	}
+
+	if b.agoraServer != nil && b.agoraListener != nil {
+		servers = append(servers, b.agoraServer)
+		serveHTTP(b.agoraServer, b.agoraListener, errCh, "agora")
+		dl.Log().With("listen", b.agoraListener.Addr().String()).Info("serving mcp for agora tunnel")
+	}
+
+	if len(servers) == 0 {
+		return fmt.Errorf("no bridge listeners are configured")
+	}
+
+	if b.agoraSubsystem != nil {
+		if b.cfg.AgoraServeEnabled() {
+			target := b.agoraServeBackendTarget()
+			if err := b.agoraSubsystem.StartServing(ctx, target); err != nil {
+				shutdownHTTPServers(servers)
+				return err
+			}
 		}
-	}()
+		if b.cfg.AgoraPublishEnabled() {
+			if err := b.agoraSubsystem.StartPublishing(ctx); err != nil {
+				shutdownHTTPServers(servers)
+				return err
+			}
+		}
+	}
 
 	// wait for context cancellation or server error
 	select {
 	case <-ctx.Done():
 		dl.Log().Info("context cancelled, shutting down")
-		return b.httpServer.Shutdown(context.Background())
+		return shutdownHTTPServers(servers)
 	case err := <-errCh:
+		shutdownHTTPServers(servers)
 		return err
 	}
 }
@@ -366,6 +443,27 @@ func (b *Bridge) Stop() error {
 	if b.httpServer != nil {
 		if err := b.httpServer.Shutdown(context.Background()); err != nil {
 			dl.Log().With("error", err).Warn("error shutting down server")
+			lastErr = err
+		}
+	}
+
+	if b.agoraServer != nil {
+		if err := b.agoraServer.Shutdown(context.Background()); err != nil {
+			dl.Log().With("error", err).Warn("error shutting down agora server")
+			lastErr = err
+		}
+	}
+
+	if b.agoraListener != nil {
+		if err := b.agoraListener.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
+			dl.Log().With("error", err).Warn("error closing agora listener")
+			lastErr = err
+		}
+	}
+
+	if b.agoraSubsystem != nil {
+		if err := b.agoraSubsystem.Close(); err != nil {
+			dl.Log().With("error", err).Warn("error closing agora subsystem")
 			lastErr = err
 		}
 	}
@@ -395,6 +493,104 @@ func (b *Bridge) Stop() error {
 
 	dl.Log().Info("mcp-bridge stopped")
 	return lastErr
+}
+
+func serveHTTP(server *http.Server, listener net.Listener, errCh chan<- error, label string) {
+	go func() {
+		err := server.Serve(listener)
+		if err == nil || errors.Is(err, http.ErrServerClosed) || errors.Is(err, net.ErrClosed) {
+			errCh <- nil
+			return
+		}
+		errCh <- fmt.Errorf("%s listener failed: %w", label, err)
+	}()
+}
+
+func shutdownHTTPServers(servers []*http.Server) error {
+	var errs []error
+	for _, server := range servers {
+		if err := server.Shutdown(context.Background()); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
+}
+
+func (b *Bridge) agoraServeBackendTarget() string {
+	if b.agoraListener == nil {
+		return ""
+	}
+
+	address := b.agoraListener.Addr().String()
+	mode := "tcp"
+	if b.cfg != nil && b.cfg.Agora != nil && strings.TrimSpace(b.cfg.Agora.TunnelMode) != "" {
+		mode = strings.ToLower(strings.TrimSpace(b.cfg.Agora.TunnelMode))
+	}
+	if mode == "http" {
+		return "http://" + address
+	}
+	return address
+}
+
+func bridgeCapabilityExtras(cfg *Config) []string {
+	if cfg == nil {
+		return nil
+	}
+
+	extras := []string{bridgeCommandTag(cfg)}
+	if cfg.AgoraServeEnabled() {
+		extras = append(extras, "agora-serve")
+	}
+	return extras
+}
+
+func bridgeCommandTag(cfg *Config) string {
+	if cfg == nil {
+		return ""
+	}
+	if tag := strings.TrimSpace(cfg.AgoraCapabilityTag); tag != "" {
+		return tag
+	}
+
+	command := filepath.Base(strings.TrimSpace(cfg.Command))
+	if !isWrapperCommand(command) {
+		return normalizeCommandTag(command)
+	}
+
+	for _, arg := range cfg.Args {
+		token := strings.TrimSpace(arg)
+		if token == "" || strings.HasPrefix(token, "-") || isWrapperSubcommand(token) {
+			continue
+		}
+		return normalizeCommandTag(token)
+	}
+
+	return normalizeCommandTag(command)
+}
+
+func isWrapperCommand(command string) bool {
+	switch command {
+	case "npx", "npm", "uvx", "bunx", "pipx", "docker":
+		return true
+	default:
+		return false
+	}
+}
+
+func isWrapperSubcommand(token string) bool {
+	switch token {
+	case "run", "exec":
+		return true
+	default:
+		return false
+	}
+}
+
+func normalizeCommandTag(token string) string {
+	token = filepath.Base(strings.TrimSpace(token))
+	token = strings.TrimPrefix(token, "mcp-server-")
+	token = strings.TrimPrefix(token, "server-")
+	return token
 }
 
 // ShareToken returns the share token after Start().

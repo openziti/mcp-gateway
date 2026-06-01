@@ -4,19 +4,24 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/michaelquigley/df/dl"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	mcpagora "github.com/openziti/mcp-gateway/agora"
 )
 
-// Client bridges stdio MCP to a remote backend over zrok.
+// Client bridges stdio MCP to a remote backend over zrok or Agora.
 type Client struct {
-	shareToken string
-	access     *Access
-	mcpClient  *mcp.Client
-	session    *mcp.ClientSession
-	server     *mcp.Server
+	shareToken  string
+	agoraTunnel string
+	agoraConfig *mcpagora.Config
+	access      *Access
+	agoraClient *mcpagora.Client
+	mcpClient   *mcp.Client
+	session     *mcp.ClientSession
+	server      *mcp.Server
 }
 
 // New creates a Client for the given share token.
@@ -30,18 +35,36 @@ func New(shareToken string) (*Client, error) {
 	}, nil
 }
 
+// NewAgora creates a Client for the given Agora tunnel.
+func NewAgora(tunnel string, cfg *mcpagora.Config) (*Client, error) {
+	tunnel = strings.TrimSpace(tunnel)
+	if tunnel == "" {
+		return nil, fmt.Errorf("agora tunnel is required")
+	}
+	if cfg == nil {
+		return nil, fmt.Errorf("agora config is required")
+	}
+	cfg.Enabled = true
+	agoraClient, err := newAgoraClient(cfg)
+	if err != nil {
+		return nil, err
+	}
+
+	return &Client{
+		agoraTunnel: tunnel,
+		agoraConfig: cfg,
+		agoraClient: agoraClient,
+	}, nil
+}
+
 // Start connects to the backend and discovers tools.
 func (c *Client) Start(ctx context.Context) error {
-	dl.Log().With("shareToken", c.shareToken).Debug("starting mcp-tools")
+	dl.Log().Debug("starting mcp-tools")
 
-	// create zrok access
-	access, err := NewAccess(c.shareToken)
+	transport, err := c.buildTransport(ctx)
 	if err != nil {
-		return fmt.Errorf("failed to create access: %w", err)
+		return err
 	}
-	c.access = access
-
-	// create MCP client
 	c.mcpClient = mcp.NewClient(
 		&mcp.Implementation{
 			Name:    "mcp-tools",
@@ -50,17 +73,10 @@ func (c *Client) Start(ctx context.Context) error {
 		nil,
 	)
 
-	// create SSE transport using zrok HTTP client
-	sseTransport := &mcp.SSEClientTransport{
-		// the host doesn't matter for routing since zrok handles it
-		Endpoint:   "http://mcp-backend/sse",
-		HTTPClient: access.HTTPClient(),
-	}
-
 	// connect to backend
-	session, err := c.mcpClient.Connect(ctx, sseTransport, nil)
+	session, err := c.mcpClient.Connect(ctx, transport, nil)
 	if err != nil {
-		c.access.Close()
+		c.closeTransport()
 		return fmt.Errorf("failed to connect to backend: %w", err)
 	}
 	c.session = session
@@ -71,7 +87,7 @@ func (c *Client) Start(ctx context.Context) error {
 	toolsResult, err := session.ListTools(ctx, nil)
 	if err != nil {
 		c.session.Close()
-		c.access.Close()
+		c.closeTransport()
 		return fmt.Errorf("failed to list tools: %w", err)
 	}
 
@@ -82,6 +98,71 @@ func (c *Client) Start(ctx context.Context) error {
 
 	dl.Log().Debug("mcp-tools started")
 	return nil
+}
+
+func (c *Client) buildTransport(ctx context.Context) (mcp.Transport, error) {
+	if c.agoraTunnel != "" {
+		dl.Log().With("agora_tunnel", c.agoraTunnel).Debug("creating agora dial")
+		if c.agoraClient == nil {
+			agoraClient, err := newAgoraClient(c.agoraConfig)
+			if err != nil {
+				return nil, err
+			}
+			c.agoraClient = agoraClient
+		}
+		loopbackAddr, err := c.agoraClient.Dial(ctx, c.agoraTunnel)
+		if err != nil {
+			c.closeTransport()
+			return nil, fmt.Errorf("failed to dial agora tunnel: %w", err)
+		}
+		return &mcp.SSEClientTransport{
+			Endpoint:   "http://" + loopbackAddr + "/sse",
+			HTTPClient: http.DefaultClient,
+		}, nil
+	}
+
+	dl.Log().With("share_token", c.shareToken).Debug("creating zrok access")
+	access, err := NewAccess(c.shareToken)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create access: %w", err)
+	}
+	c.access = access
+	return &mcp.SSEClientTransport{
+		// the host doesn't matter for routing since zrok handles it
+		Endpoint:   "http://mcp-backend/sse",
+		HTTPClient: access.HTTPClient(),
+	}, nil
+}
+
+func newAgoraClient(cfg *mcpagora.Config) (*mcpagora.Client, error) {
+	agoraClient, err := mcpagora.NewClient(mcpagora.ClientOptions{
+		Config: cfg,
+		Defaults: mcpagora.Defaults{
+			InstanceName:    "mcp-tools",
+			Description:     "MCP tools client",
+			TunnelMode:      "tcp",
+			AgentNamePrefix: "mcp-tools",
+		},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to create agora client: %w", err)
+	}
+	return agoraClient, nil
+}
+
+func (c *Client) closeTransport() error {
+	var lastErr error
+	if c.access != nil {
+		if err := c.access.Close(); err != nil {
+			lastErr = err
+		}
+	}
+	if c.agoraClient != nil {
+		if err := c.agoraClient.Close(); err != nil {
+			lastErr = err
+		}
+	}
+	return lastErr
 }
 
 // createProxyServer creates an MCP server that proxies to the backend.
@@ -195,6 +276,13 @@ func (c *Client) Stop() error {
 	if c.access != nil {
 		if err := c.access.Close(); err != nil {
 			dl.Log().With("error", err).Debug("error closing access")
+			lastErr = err
+		}
+	}
+
+	if c.agoraClient != nil {
+		if err := c.agoraClient.Close(); err != nil {
+			dl.Log().With("error", err).Debug("error closing agora client")
 			lastErr = err
 		}
 	}

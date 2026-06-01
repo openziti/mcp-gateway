@@ -17,20 +17,24 @@ func init() {
 }
 
 type httpCommand struct {
-	bind         string
-	stateless    bool
-	jsonResponse bool
-	cmd          *cobra.Command
+	bind                 string
+	agoraTunnel          string
+	agoraIntegrationFile string
+	stateless            bool
+	jsonResponse         bool
+	cmd                  *cobra.Command
 }
 
 func newHTTPCommand() *httpCommand {
 	cmd := &cobra.Command{
-		Use:   "http <shareToken>",
+		Use:   "http [<shareToken>]",
 		Short: "serve mcp over http (streamable http transport)",
-		Args:  cobra.ExactArgs(1),
+		Args:  cobra.MaximumNArgs(1),
 	}
 	command := &httpCommand{cmd: cmd}
 	cmd.Flags().StringVar(&command.bind, "bind", "127.0.0.1:8080", "address to bind to")
+	cmd.Flags().StringVar(&command.agoraTunnel, "agora", "", "agora tunnel to connect to")
+	cmd.Flags().StringVar(&command.agoraIntegrationFile, "agora-integration-file", "", "path to Agora integration file")
 	cmd.Flags().BoolVar(&command.stateless, "stateless", false, "run in stateless mode")
 	cmd.Flags().BoolVar(&command.jsonResponse, "json-response", false, "prefer json responses over sse")
 	cmd.RunE = command.run
@@ -38,12 +42,15 @@ func newHTTPCommand() *httpCommand {
 }
 
 func (cmd *httpCommand) run(_ *cobra.Command, args []string) (retErr error) {
-	shareToken := args[0]
+	target, err := resolveToolsTarget(args, cmd.agoraTunnel, cmd.agoraIntegrationFile)
+	if err != nil {
+		return err
+	}
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
-	c, err := newToolsClient(shareToken)
+	c, err := newToolsClient(target)
 	if err != nil {
 		return fmt.Errorf("failed to create client: %w", err)
 	}

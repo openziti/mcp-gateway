@@ -152,3 +152,69 @@ func TestValidateRejectsMalformedHTTPTransportEndpoint(t *testing.T) {
 		t.Fatalf("expected endpoint field, got %s", configErr.Field)
 	}
 }
+
+func TestValidateAcceptsAgoraTransport(t *testing.T) {
+	cfg := &Config{
+		Backends: []BackendConfig{{
+			ID: "remote",
+			Transport: TransportConfig{
+				Type:        "agora",
+				AgoraTunnel: "filesystem-relay",
+			},
+		}},
+	}
+
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("expected success, got %v", err)
+	}
+}
+
+func TestValidateRejectsAgoraTransportWithoutTunnel(t *testing.T) {
+	cfg := &Config{
+		Backends: []BackendConfig{{
+			ID: "remote",
+			Transport: TransportConfig{
+				Type: "agora",
+			},
+		}},
+	}
+
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatalf("expected validation error")
+	}
+
+	configErr, ok := err.(*ConfigError)
+	if !ok {
+		t.Fatalf("expected ConfigError, got %T", err)
+	}
+	if configErr.Field != "backends[0].transport.agora_tunnel" {
+		t.Fatalf("expected agora_tunnel field, got %s", configErr.Field)
+	}
+}
+
+func TestValidateRejectsAgoraTransportWithOtherTransportFields(t *testing.T) {
+	cfg := &Config{
+		Backends: []BackendConfig{{
+			ID: "remote",
+			Transport: TransportConfig{
+				Type:        "agora",
+				AgoraTunnel: "filesystem-relay",
+				ShareToken:  "zrok-share",
+			},
+		}},
+	}
+
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatalf("expected validation error")
+	}
+
+	configErr, ok := err.(*ConfigError)
+	if !ok {
+		t.Fatalf("expected ConfigError, got %T", err)
+	}
+	if configErr.Field != "backends[0].transport" {
+		t.Fatalf("expected transport field, got %s", configErr.Field)
+	}
+}

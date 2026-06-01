@@ -3,8 +3,10 @@ package aggregator
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"os"
 	"os/exec"
+	"strings"
 	"sync"
 
 	"github.com/michaelquigley/df/dl"
@@ -25,10 +27,14 @@ type Backend struct {
 
 // BackendManager manages connections to multiple backend MCP servers.
 type BackendManager struct {
-	backends map[string]*Backend
-	config   *Config
-	mu       sync.RWMutex
+	backends        map[string]*Backend
+	config          *Config
+	connectResolver ConnectResolver
+	mu              sync.RWMutex
 }
+
+// ConnectResolver resolves an Agora backend ID to its local loopback address.
+type ConnectResolver func(backendID string) (loopbackAddr string, ok bool)
 
 // NewBackendManager creates a new manager for backend connections.
 func NewBackendManager(cfg *Config) *BackendManager {
@@ -36,6 +42,11 @@ func NewBackendManager(cfg *Config) *BackendManager {
 		backends: make(map[string]*Backend),
 		config:   cfg,
 	}
+}
+
+// SetConnectResolver sets the resolver used for Agora backends.
+func (m *BackendManager) SetConnectResolver(resolver ConnectResolver) {
+	m.connectResolver = resolver
 }
 
 // Connect establishes connections to all configured backends.
@@ -65,6 +76,8 @@ func (m *BackendManager) connectBackend(ctx context.Context, cfg BackendConfig) 
 		return m.connectStdioBackend(ctx, cfg)
 	case "zrok":
 		return m.connectZrokBackend(ctx, cfg)
+	case "agora":
+		return m.connectAgoraBackend(ctx, cfg)
 	case "http", "https":
 		return m.connectHTTPBackend(ctx, cfg)
 	default:
@@ -183,6 +196,69 @@ func (m *BackendManager) connectZrokBackend(ctx context.Context, cfg BackendConf
 		tools:   toolsResult.Tools,
 		access:  access,
 	}, nil
+}
+
+// connectAgoraBackend establishes a connection to a remote Agora backend.
+func (m *BackendManager) connectAgoraBackend(ctx context.Context, cfg BackendConfig) (*Backend, error) {
+	loopbackAddr, err := m.resolveAgoraLoopback(cfg.ID)
+	if err != nil {
+		return nil, err
+	}
+
+	mcpClient := mcp.NewClient(
+		&mcp.Implementation{
+			Name:    m.config.Aggregator.Name,
+			Version: m.config.Aggregator.Version,
+		},
+		nil,
+	)
+
+	sseTransport := &mcp.SSEClientTransport{
+		Endpoint:   "http://" + loopbackAddr + "/sse",
+		HTTPClient: http.DefaultClient,
+	}
+
+	session, err := ConnectWithTimeout(ctx, m.config.Aggregator.Connection.ConnectTimeout, func(connectCtx context.Context) (*mcp.ClientSession, error) {
+		return mcpClient.Connect(connectCtx, sseTransport, nil)
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to connect to agora backend: %w", err)
+	}
+
+	listCtx, cancel := context.WithTimeout(ctx, m.config.Aggregator.Connection.ConnectTimeout)
+	defer cancel()
+
+	toolsResult, err := session.ListTools(listCtx, nil)
+	if err != nil {
+		session.Close()
+		return nil, fmt.Errorf("failed to list tools from agora backend: %w", err)
+	}
+
+	name := cfg.Name
+	if name == "" {
+		name = cfg.ID
+	}
+
+	dl.Log().With("backend", cfg.ID).With("agora_tunnel", cfg.Transport.AgoraTunnel).With("loopback", loopbackAddr).Info("connected to agora backend")
+
+	return &Backend{
+		id:      cfg.ID,
+		name:    name,
+		client:  mcpClient,
+		session: session,
+		tools:   toolsResult.Tools,
+	}, nil
+}
+
+func (m *BackendManager) resolveAgoraLoopback(backendID string) (string, error) {
+	if m.connectResolver == nil {
+		return "", fmt.Errorf("agora connect resolver is not configured")
+	}
+	loopbackAddr, ok := m.connectResolver(backendID)
+	if !ok || strings.TrimSpace(loopbackAddr) == "" {
+		return "", fmt.Errorf("agora connect address for backend '%s' was not initialized", backendID)
+	}
+	return strings.TrimSpace(loopbackAddr), nil
 }
 
 // connectHTTPBackend establishes a connection to a remote HTTP(S) backend.

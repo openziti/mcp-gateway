@@ -4,20 +4,27 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 
 	"github.com/michaelquigley/df/dl"
+	mcpagora "github.com/openziti/mcp-gateway/agora"
 	"github.com/openziti/mcp-gateway/tools"
 	"github.com/spf13/cobra"
 )
+
+const agoraToolsIntegrationFileEnv = "AGORA_MCP_TOOLS_INTEGRATION_FILE"
 
 func init() {
 	rootCmd.AddCommand(newRunCommand().cmd)
 }
 
 type runCommand struct {
-	cmd *cobra.Command
+	agoraTunnel          string
+	agoraIntegrationFile string
+	cmd                  *cobra.Command
 }
 
 type toolsClient interface {
@@ -27,29 +34,45 @@ type toolsClient interface {
 	Stop() error
 }
 
-var newToolsClient = func(shareToken string) (toolsClient, error) {
-	return tools.New(shareToken)
+type toolsTarget struct {
+	ShareToken  string
+	AgoraTunnel string
+	AgoraConfig *mcpagora.Config
 }
+
+var newToolsClient = func(target toolsTarget) (toolsClient, error) {
+	if target.AgoraTunnel != "" {
+		return tools.NewAgora(target.AgoraTunnel, target.AgoraConfig)
+	}
+	return tools.New(target.ShareToken)
+}
+
+var resolveAgoraConfig = mcpagora.ResolveConfig
 
 func newRunCommand() *runCommand {
 	cmd := &cobra.Command{
-		Use:   "run <shareToken>",
+		Use:   "run [<shareToken>]",
 		Short: "connect to an mcp gateway share",
-		Args:  cobra.ExactArgs(1),
+		Args:  cobra.MaximumNArgs(1),
 	}
 	command := &runCommand{cmd: cmd}
+	cmd.Flags().StringVar(&command.agoraTunnel, "agora", "", "agora tunnel to connect to")
+	cmd.Flags().StringVar(&command.agoraIntegrationFile, "agora-integration-file", "", "path to Agora integration file")
 	cmd.RunE = command.run
 	return command
 }
 
 func (cmd *runCommand) run(_ *cobra.Command, args []string) (retErr error) {
-	shareToken := args[0]
+	target, err := resolveToolsTarget(args, cmd.agoraTunnel, cmd.agoraIntegrationFile)
+	if err != nil {
+		return err
+	}
 
 	ctx, cancel := signal.NotifyContext(context.Background(),
 		syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
-	c, err := newToolsClient(shareToken)
+	c, err := newToolsClient(target)
 	if err != nil {
 		return fmt.Errorf("failed to create client: %w", err)
 	}
@@ -72,4 +95,32 @@ func (cmd *runCommand) run(_ *cobra.Command, args []string) (retErr error) {
 	}
 
 	return nil
+}
+
+func resolveToolsTarget(args []string, agoraTunnel, integrationFile string) (toolsTarget, error) {
+	agoraTunnel = strings.TrimSpace(agoraTunnel)
+	if agoraTunnel != "" && len(args) > 0 {
+		return toolsTarget{}, fmt.Errorf("--agora is mutually exclusive with positional share token")
+	}
+	if agoraTunnel == "" {
+		if len(args) != 1 {
+			return toolsTarget{}, fmt.Errorf("share token is required unless --agora is set")
+		}
+		return toolsTarget{ShareToken: args[0]}, nil
+	}
+
+	if integrationFile == "" {
+		integrationFile = os.Getenv(agoraToolsIntegrationFileEnv)
+	}
+	cfg := &mcpagora.Config{
+		Enabled:         true,
+		IntegrationFile: integrationFile,
+	}
+	if err := resolveAgoraConfig(cfg); err != nil {
+		return toolsTarget{}, err
+	}
+	return toolsTarget{
+		AgoraTunnel: agoraTunnel,
+		AgoraConfig: cfg,
+	}, nil
 }
