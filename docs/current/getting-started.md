@@ -502,8 +502,8 @@ Any stdio MCP server works with `mcp-bridge` and `mcp-gateway` regardless of lan
 
 ## Next Steps
 
-- **Full configuration reference**: See [../etc/mcp-gateway.yml](../etc/mcp-gateway.yml) for all configuration options with detailed comments
-- **Architecture overview**: The [README](../README.md) has diagrams showing how components interact
+- **Full configuration reference**: See [etc/mcp-gateway.yml](../../etc/mcp-gateway.yml) for all configuration options with detailed comments
+- **Architecture overview**: The [README](../../README.md) has diagrams showing how components interact
 - **Troubleshooting**: Check the troubleshooting section below or see CLAUDE.md for debugging tips
 
 ## Troubleshooting

@@ -37,7 +37,7 @@ flowchart LR
 
 ## Quick Start
 
-> **New to MCP Gateway?** See the [Getting Started Guide](docs/GETTING-STARTED.md) for a complete walkthrough.
+> **New to MCP Gateway?** See the [Getting Started Guide](docs/current/getting-started.md) for a complete walkthrough.
 
 ### 1. Install
 
@@ -164,7 +164,7 @@ backends:
 mcp-tools run --agora mcp-gateway-engineering
 ```
 
-See [Agora Integration](docs/agora.md) for configuration, CLI flags, integration files, and smoke scenarios.
+See [Agora Integration](docs/current/agora.md) for configuration, CLI flags, integration files, and smoke scenarios.
 
 ### Connect to HTTP and HTTPS MCP Servers
 
@@ -311,7 +311,7 @@ go build ./cmd/mcp-tools
 ## Documentation
 
 - [Example Configuration](etc/mcp-gateway.yml) - Fully documented configuration file
-- [Agora Integration](docs/agora.md) - Agora serving, backend connects, mcp-tools dialing, and smoke scenarios
+- [Agora Integration](docs/current/agora.md) - Agora serving, backend connects, mcp-tools dialing, and smoke scenarios
 - [OpenZiti Documentation](https://openziti.io/docs)
 - [zrok Documentation](https://docs.zrok.io)
 - [MCP Specification](https://modelcontextprotocol.io)

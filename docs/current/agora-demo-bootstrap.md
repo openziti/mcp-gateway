@@ -28,7 +28,7 @@ Agora environment and catalog IDs.
 
 ## Demo Launch
 
-Use [etc/demo-mcp-gateway.yml](../etc/demo-mcp-gateway.yml) as the gateway
+Use [etc/demo-mcp-gateway.yml](../../etc/demo-mcp-gateway.yml) as the gateway
 config. It is Agora-only for the dashboard demo, serves the gateway over an
 Agora Layer 1 tunnel, and explicitly enables catalog publication.
 
