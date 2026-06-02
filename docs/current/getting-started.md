@@ -62,6 +62,14 @@ go install github.com/openziti/mcp-gateway/cmd/...@latest
 
 This installs all components: `mcp-gateway`, `mcp-bridge`, `mcp-tools`, and `mcp-filesystem` (a sandboxed filesystem server included for getting started).
 
+Check installed versions with:
+
+```bash
+mcp-gateway version
+mcp-bridge version
+mcp-tools version
+```
+
 ### Start the bridge
 
 We'll use `mcp-filesystem`, a sandboxed filesystem MCP server bundled with this project. It exposes three tools—`read_file`, `write_file`, and `list_directory`—restricted to the directories you specify. No additional dependencies required.
@@ -201,6 +209,25 @@ aggregator:
     connect_timeout: 30s  # time to wait when connecting to a backend
     call_timeout: 60s     # time to wait for a tool call to complete
 ```
+
+### Listener resilience
+
+For zrok-served gateways, listener resilience is enabled by default. The gateway watches the zrok share listener's established terminator count. If the count drops to zero and stays there past the grace window, the gateway creates a fresh listener for the same share token and swaps it under the running HTTP server.
+
+The same watchdog runs in standalone and orchestrator-managed deployments. If rebuilds keep failing, standalone gateways log the unrecoverable condition and exit so an external supervisor can restart the process. Managed gateways log the same condition and keep retrying, leaving terminal restart to the orchestrator.
+
+```yaml
+resilience:
+  watchdog_enabled: true
+  poll_interval: 10s
+  zero_established_grace: 90s
+  max_rebuild_failures: 5
+  heartbeat_interval: 5m  # set to 0 to disable gateway alive log lines
+```
+
+The heartbeat logs `gateway alive` with the active session count, established terminator count when available, and seconds since the last accepted client connection.
+
+Backend sessions also self-heal on dead transports. If a tool call fails because the backend connection closed or dropped, the gateway tears down that backend session, reconnects, re-runs the MCP `initialize` handshake, and retries the call once. Tool error results, backend protocol error responses, call timeouts, and caller cancellations are returned without replaying the call.
 
 ### Tool namespacing
 
@@ -464,6 +491,8 @@ backends:
 ```
 
 Now you can stop and restart the gateway, and clients reconnect using the same token.
+
+For production standalone gateways, run `mcp-gateway` under a supervisor or service manager that restarts it on exit. The gateway self-heals listener wedges in process when it can; if repeated listener rebuilds cannot recover the share, it exits cleanly instead of staying alive but deaf.
 
 ### Use with mcp-bridge
 

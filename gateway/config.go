@@ -15,6 +15,7 @@ type Config struct {
 	Backends     []aggregator.BackendConfig
 	Zrok         *ZrokConfig
 	Agora        *agora.Config
+	Resilience   ResilienceConfig
 	ShareToken   string // if set, use existing share (managed mode)
 	Orchestrator *OrchestratorConfig
 	LogFile      string // if set, redirect logging to this file
@@ -36,11 +37,31 @@ type OrchestratorConfig struct {
 	HeartbeatInterval time.Duration
 }
 
+// ResilienceConfig controls gateway listener self-healing and liveness logging.
+type ResilienceConfig struct {
+	WatchdogEnabled      bool
+	PollInterval         time.Duration
+	ZeroEstablishedGrace time.Duration
+	MaxRebuildFailures   int
+	HeartbeatInterval    time.Duration
+}
+
 // DefaultOrchestratorConfig returns default orchestrator connection configuration.
 func DefaultOrchestratorConfig() *OrchestratorConfig {
 	return &OrchestratorConfig{
 		SocketPath:        "/var/run/mcp-orchestrator/orchestrator.sock",
 		HeartbeatInterval: 30 * time.Second,
+	}
+}
+
+// DefaultResilienceConfig returns listener resilience defaults.
+func DefaultResilienceConfig() ResilienceConfig {
+	return ResilienceConfig{
+		WatchdogEnabled:      true,
+		PollInterval:         10 * time.Second,
+		ZeroEstablishedGrace: 90 * time.Second,
+		MaxRebuildFailures:   5,
+		HeartbeatInterval:    5 * time.Minute,
 	}
 }
 
@@ -54,6 +75,7 @@ func DefaultConfig() *Config {
 				Enabled: true,
 			},
 		},
+		Resilience: DefaultResilienceConfig(),
 	}
 }
 
@@ -95,6 +117,10 @@ func (c *Config) Validate() error {
 		return &ConfigError{Field: "network", Message: "at least one of zrok.share.enabled or agora.serve.enabled must be true"}
 	}
 
+	if err := c.validateResilience(); err != nil {
+		return err
+	}
+
 	// validate backends using aggregator's validation logic
 	aggCfg := c.toAggregatorConfig()
 	if err := aggCfg.Validate(); err != nil {
@@ -103,6 +129,30 @@ func (c *Config) Validate() error {
 
 	if c.hasAgoraBackends() && (c.Agora == nil || !c.Agora.Enabled) {
 		return &ConfigError{Field: "agora.enabled", Message: "agora transport backends require agora.enabled"}
+	}
+
+	return nil
+}
+
+func (c *Config) validateResilience() error {
+	resilience := c.Resilience
+
+	if resilience.HeartbeatInterval < 0 {
+		return &ConfigError{Field: "resilience.heartbeat_interval", Message: "heartbeat_interval must be zero or positive"}
+	}
+
+	if !resilience.WatchdogEnabled {
+		return nil
+	}
+
+	if resilience.PollInterval <= 0 {
+		return &ConfigError{Field: "resilience.poll_interval", Message: "poll_interval must be positive when watchdog is enabled"}
+	}
+	if resilience.ZeroEstablishedGrace <= 0 {
+		return &ConfigError{Field: "resilience.zero_established_grace", Message: "zero_established_grace must be positive when watchdog is enabled"}
+	}
+	if resilience.MaxRebuildFailures <= 0 {
+		return &ConfigError{Field: "resilience.max_rebuild_failures", Message: "max_rebuild_failures must be positive when watchdog is enabled"}
 	}
 
 	return nil
