@@ -22,9 +22,11 @@ underlying fabric channel for that share dies — a link failure, a terminator
 loss, the latency-probe-timeout storm seen in one incident — the listener's
 established terminators fall away, but its accept call does not return an error
 and does not unblock. It simply waits forever for a connection that can no longer
-arrive. The accept loop is parked on a dead listener, and nothing in the gateway
-is watching for that condition or able to rebuild the listener. The serving path
-has failed in a way the serving path itself cannot see.
+arrive. The accept loop is parked on a dead listener. The SDK beneath it keeps
+trying to re-establish terminators in place, but under a sustained fabric fault
+that recovery makes no progress — and nothing in the gateway is watching for the
+condition or able to rebuild the listener from scratch. The serving path has
+failed in a way the serving path itself cannot see.
 
 Two narrower failures travel alongside the wedge and deserve fixing in the same
 pass, because they share its root disease — *trusting a connection that has gone
@@ -52,10 +54,17 @@ bad without ever checking*:
 
 - The serving path survives fabric faults. When the listener behind the share
   dies, the gateway detects it and re-establishes serving on the same persistent
-  share token, in process, without operator intervention.
-- When self-healing genuinely cannot succeed, the gateway fails *honestly* —
-  it logs the condition clearly and exits, so a supervisor can restart it, rather
-  than lingering as a green-looking corpse.
+  share token, in process, without operator intervention. This in-process
+  self-heal applies in **both** standalone and orchestrator-managed deployments —
+  the wedge is invisible to an orchestrator too (its IPC heartbeat keeps beating
+  from a separate goroutine while the serve loop is dead), so the gateway healing
+  itself is the recovery either way.
+- When self-healing genuinely cannot succeed, the gateway fails *honestly* rather
+  than lingering as a green-looking corpse. In standalone mode it logs the
+  condition clearly and exits, so a supervisor can restart it. In managed mode it
+  logs the same condition loudly and keeps retrying, leaving terminal recovery to
+  the orchestrator that owns its lifecycle — the gateway never silently exits out
+  from under its supervisor.
 - Backend sessions re-handshake rather than rot: a connection that has gone bad
   is torn down and rebuilt (which re-runs `initialize`) instead of reused.
 - The process is never silent. Degradation always produces a structured log line,
@@ -72,8 +81,13 @@ bad without ever checking*:
   symptom emitted a layer below the gateway. Rather than intercept and reformat
   that log stream, the gateway acts on the *consequence* it can observe directly —
   the loss of established terminators.
-- The managed/orchestrator (IPC) path. Both incidents occurred in standalone
-  mode; the managed lifecycle is untouched by this work.
+- Changes to the IPC protocol itself. The in-process self-heal runs in managed
+  mode too, but it does so without touching the orchestrator wire protocol: no new
+  IPC messages, no `gateway.proto` change. The two IPC-coupled refinements — a
+  `StatusReport` handshake when self-heal is exhausted, and surfacing listener
+  health on the IPC heartbeat so the orchestrator's own view stops lying — are
+  deferred (see Deferred). Both incidents occurred in standalone mode; the
+  orchestrator lifecycle contract is unchanged here.
 
 ## Model
 
@@ -88,16 +102,22 @@ observes the listener's health through the signal the fabric SDK already exposes
 the count of established terminators — and treats a sustained drop to zero (while
 the accept loop is parked) as the wedge. On detecting it, the watchdog rebuilds
 the listener on the same persistent token and swaps it in. Self-heal is the
-primary path; a bounded number of consecutive rebuild failures escalates to an
-honest exit. Recovery is in-process and seamless when it can be; loud and
-terminal when it can't.
+primary path and runs in both standalone and managed deployments; a bounded number
+of consecutive rebuild failures escalates honestly — in standalone mode to a clean
+exit a supervisor can restart, in managed mode to a loud log while the watchdog
+keeps retrying and leaves terminal recovery to the orchestrator. Recovery is
+in-process and seamless when it can be; loud and never silent when it can't.
 
 **2. Backend sessions re-handshake rather than rot.** A backend connection is
-provisional, not permanent. When a tool call fails at the transport level — a
-protocol error, a dead stream, a deadline against an unresponsive session, as
-distinct from a tool that legitimately returns an error result — the gateway
+provisional, not permanent. When a tool call fails because the backend
+connection itself is dead — a closed or broken transport stream — the gateway
 discards that backend session and reconnects, which necessarily re-runs the MCP
-`initialize` handshake, then retries the call once. The gateway never resumes
+`initialize` handshake, then retries the call once. This is deliberately the
+narrowest trigger: a tool that returns an error result, a backend that *answers*
+with a protocol error (the session is alive), and a call that simply exhausted its
+time budget are all left alone — surfaced as-is with the connection intact — so a
+legitimately slow tool is never silently replayed and a live-but-complaining
+backend is never needlessly churned. The gateway never resumes
 talking to a session whose initialization state it cannot vouch for.
 
 **3. The process is never silent.** Every transition that matters becomes a
@@ -134,9 +154,11 @@ rebuilds the listener on the same token, swaps it under the still-running HTTP
 server, and logs `share listener rebuilt`. New client sessions are accepted again
 with no manual restart. Throughout, the heartbeat continues to report state, so
 even the brief outage is legible in the log. If the fabric is so broken that
-rebuilds keep failing, the watchdog escalates: after a bounded number of attempts
-it logs an unrecoverable-shutdown line and exits cleanly, handing recovery to a
-supervisor instead of lingering.
+rebuilds keep failing, the watchdog escalates after a bounded number of attempts:
+in standalone mode it logs an unrecoverable-shutdown line and exits cleanly,
+handing recovery to a supervisor instead of lingering; in managed mode it logs the
+same line and keeps retrying, leaving the hard restart to the orchestrator rather
+than exiting out from under it.
 
 ## Deferred (and Why)
 
@@ -154,6 +176,17 @@ supervisor instead of lingering.
   watchdog already acts on the observable consequence (terminator loss); the
   structured probe event would be additional diagnostic polish, not a behavior
   the recovery path depends on.
+
+- **IPC-coupled managed refinements.** In-process self-heal runs in managed mode
+  now, but two refinements that would make the orchestrator a first-class partner
+  in recovery are deferred, because both touch the IPC wire protocol the rest of
+  this work leaves alone. First, a `StatusReport` handshake when self-heal is
+  exhausted, so the orchestrator restarts the gateway *knowingly* rather than
+  inferring a crash. Second, surfacing listener health (established terminators,
+  seconds-since-accept) on the IPC heartbeat, so the orchestrator's own view stops
+  lying during a wedge the way cheap monitoring does today. Until then, managed
+  mode self-heals the common case and logs loudly on the rare unrecoverable one,
+  leaving terminal restart to the orchestrator's existing lifecycle control.
 
 - **Supervisor guidance for the fail-fast leg.** The honest-exit fallback assumes
   something restarts the process. The user currently runs under `nohup … &
