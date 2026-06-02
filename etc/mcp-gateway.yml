@@ -49,6 +49,17 @@
 #  share:
 #    enabled: true
 
+# listener resilience is enabled by default for zrok-served gateways. the
+# watchdog rebuilds the share listener on the same token if the OpenZiti
+# terminators disappear and do not recover within the grace window. set
+# watchdog_enabled: false only when you need the old non-healing behavior.
+#resilience:
+#  watchdog_enabled: true
+#  poll_interval: 10s
+#  zero_established_grace: 90s
+#  max_rebuild_failures: 5
+#  heartbeat_interval: 5m  # set to 0 to disable gateway alive log lines
+
 # agora integration
 # enables optional catalog publishing, serving over Agora, and backend connects
 # through Agora Layer 1 tunnels. use --network=agora to set agora.enabled: true

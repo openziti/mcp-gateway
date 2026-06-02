@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -51,27 +53,36 @@ func extractHeaders(r *http.Request) map[string]string {
 // each incoming SSE client gets its own ClientSession with dedicated
 // connections to all configured backends.
 type ClientSession struct {
-	id        string
-	createdAt time.Time
-	client    *ClientContext
-	config    *Config
-	namespace *aggregator.Namespace
-	resolver  aggregator.ConnectResolver
-	backends  map[string]*sessionBackend
-	ctx       context.Context
-	cancel    context.CancelFunc
-	mu        sync.Mutex
-	closed    bool
+	id                 string
+	createdAt          time.Time
+	client             *ClientContext
+	config             *Config
+	namespace          *aggregator.Namespace
+	resolver           aggregator.ConnectResolver
+	backends           map[string]*sessionBackend
+	reconnectGuards    map[string]*sync.Mutex
+	connectBackendFunc func(context.Context, aggregator.BackendConfig) (*sessionBackend, error)
+	ctx                context.Context
+	cancel             context.CancelFunc
+	mu                 sync.Mutex
+	closed             bool
+}
+
+type mcpClientSession interface {
+	CallTool(context.Context, *mcp.CallToolParams) (*mcp.CallToolResult, error)
+	Close() error
 }
 
 // sessionBackend represents one backend connection for this client session.
 type sessionBackend struct {
-	id      string
-	cfg     aggregator.BackendConfig
-	client  *mcp.Client
-	session *mcp.ClientSession
-	cmd     *exec.Cmd     // stdio backends only
-	access  *tools.Access // zrok backends only
+	id        string
+	cfg       aggregator.BackendConfig
+	client    *mcp.Client
+	session   mcpClientSession
+	cmd       *exec.Cmd     // stdio backends only
+	access    *tools.Access // zrok backends only
+	closeOnce sync.Once
+	closeErr  error
 }
 
 // NewClientSession creates an isolated session with connections to all backends.
@@ -80,15 +91,16 @@ func NewClientSession(ctx context.Context, config *Config, namespace *aggregator
 	sessionCtx, cancel := context.WithCancel(ctx)
 
 	cs := &ClientSession{
-		id:        uuid.New().String(),
-		createdAt: time.Now(),
-		client:    client,
-		config:    config,
-		namespace: namespace,
-		resolver:  resolver,
-		backends:  make(map[string]*sessionBackend),
-		ctx:       sessionCtx,
-		cancel:    cancel,
+		id:              uuid.New().String(),
+		createdAt:       time.Now(),
+		client:          client,
+		config:          config,
+		namespace:       namespace,
+		resolver:        resolver,
+		backends:        make(map[string]*sessionBackend),
+		reconnectGuards: make(map[string]*sync.Mutex),
+		ctx:             sessionCtx,
+		cancel:          cancel,
 	}
 
 	// connect to all backends
@@ -114,6 +126,37 @@ func NewClientSession(ctx context.Context, config *Config, namespace *aggregator
 
 // connectBackend establishes a connection to a single backend.
 func (cs *ClientSession) connectBackend(ctx context.Context, cfg aggregator.BackendConfig) (*sessionBackend, error) {
+	dl.Log().
+		With("session_id", cs.id).
+		With("backend", cfg.ID).
+		With("type", cfg.Transport.Type).
+		Info("connecting to backend")
+
+	connect := cs.connectBackendReal
+	if cs.connectBackendFunc != nil {
+		connect = cs.connectBackendFunc
+	}
+
+	backend, err := connect(ctx, cfg)
+	if err != nil {
+		dl.Log().
+			With("session_id", cs.id).
+			With("backend", cfg.ID).
+			With("type", cfg.Transport.Type).
+			With("error", err).
+			Warn("backend connect failed")
+		return nil, err
+	}
+
+	dl.Log().
+		With("session_id", cs.id).
+		With("backend", cfg.ID).
+		With("type", cfg.Transport.Type).
+		Info("backend connected")
+	return backend, nil
+}
+
+func (cs *ClientSession) connectBackendReal(ctx context.Context, cfg aggregator.BackendConfig) (*sessionBackend, error) {
 	switch cfg.Transport.Type {
 	case "stdio":
 		return cs.connectStdioBackend(ctx, cfg)
@@ -292,13 +335,6 @@ func (cs *ClientSession) createToolHandler(namespacedName string) mcp.ToolHandle
 func (cs *ClientSession) CallTool(ctx context.Context, namespacedName string, args any) (*mcp.CallToolResult, error) {
 	start := time.Now()
 
-	cs.mu.Lock()
-	if cs.closed {
-		cs.mu.Unlock()
-		return nil, errors.New("session is closed")
-	}
-	cs.mu.Unlock()
-
 	// look up the tool to find which backend owns it
 	tool, ok := cs.namespace.GetTool(namespacedName)
 	if !ok {
@@ -306,7 +342,13 @@ func (cs *ClientSession) CallTool(ctx context.Context, namespacedName string, ar
 	}
 
 	// find the backend for this tool
+	cs.mu.Lock()
+	if cs.closed {
+		cs.mu.Unlock()
+		return nil, errors.New("session is closed")
+	}
 	backend, ok := cs.backends[tool.BackendID]
+	cs.mu.Unlock()
 	if !ok {
 		return nil, fmt.Errorf("backend '%s' not found for tool '%s'", tool.BackendID, namespacedName)
 	}
@@ -320,6 +362,21 @@ func (cs *ClientSession) CallTool(ctx context.Context, namespacedName string, ar
 		Name:      tool.OriginalName,
 		Arguments: args,
 	})
+	if err != nil && isRetryableBackendSessionError(err) {
+		dl.Log().
+			With("session_id", cs.id).
+			With("backend", tool.BackendID).
+			With("tool", namespacedName).
+			With("error", err).
+			Info("backend session error, reconnecting")
+
+		if retryBackend, reconnected := cs.reconnectBackend(tool.BackendID, backend, err); reconnected {
+			result, err = retryBackend.session.CallTool(callCtx, &mcp.CallToolParams{
+				Name:      tool.OriginalName,
+				Arguments: args,
+			})
+		}
+	}
 	duration := time.Since(start)
 
 	if err != nil {
@@ -345,6 +402,92 @@ func (cs *ClientSession) CallTool(ctx context.Context, namespacedName string, ar
 	return result, nil
 }
 
+func isRetryableBackendSessionError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
+	return errors.Is(err, mcp.ErrConnectionClosed) ||
+		errors.Is(err, io.EOF) ||
+		errors.Is(err, io.ErrUnexpectedEOF) ||
+		errors.Is(err, net.ErrClosed)
+}
+
+func (cs *ClientSession) reconnectBackend(backendID string, failed *sessionBackend, originalErr error) (*sessionBackend, bool) {
+	guard := cs.reconnectGuard(backendID)
+	guard.Lock()
+	defer guard.Unlock()
+
+	cs.mu.Lock()
+	if cs.closed {
+		cs.mu.Unlock()
+		return nil, false
+	}
+	current := cs.backends[backendID]
+	if current != failed {
+		cs.mu.Unlock()
+		return current, current != nil
+	}
+	cs.mu.Unlock()
+
+	if err := failed.Close(); err != nil {
+		dl.Log().
+			With("session_id", cs.id).
+			With("backend", backendID).
+			With("error", err).
+			Warn("error closing failed backend session")
+	}
+
+	fresh, err := cs.connectBackend(cs.ctx, failed.cfg)
+	if err != nil {
+		dl.Log().
+			With("session_id", cs.id).
+			With("backend", backendID).
+			With("call_error", originalErr).
+			With("reconnect_error", err).
+			Warn("backend reconnect failed")
+		return nil, false
+	}
+
+	cs.mu.Lock()
+	if cs.closed || cs.backends[backendID] != failed {
+		var current *sessionBackend
+		if !cs.closed {
+			current = cs.backends[backendID]
+		}
+		cs.mu.Unlock()
+		if err := fresh.Close(); err != nil {
+			dl.Log().
+				With("session_id", cs.id).
+				With("backend", backendID).
+				With("error", err).
+				Warn("error closing discarded backend session")
+		}
+		return current, current != nil && current != failed
+	}
+	cs.backends[backendID] = fresh
+	cs.mu.Unlock()
+
+	return fresh, true
+}
+
+func (cs *ClientSession) reconnectGuard(backendID string) *sync.Mutex {
+	cs.mu.Lock()
+	defer cs.mu.Unlock()
+
+	if cs.reconnectGuards == nil {
+		cs.reconnectGuards = make(map[string]*sync.Mutex)
+	}
+	guard := cs.reconnectGuards[backendID]
+	if guard == nil {
+		guard = &sync.Mutex{}
+		cs.reconnectGuards[backendID] = guard
+	}
+	return guard
+}
+
 // ID returns the session's unique identifier.
 func (cs *ClientSession) ID() string {
 	return cs.id
@@ -358,13 +501,15 @@ func (cs *ClientSession) Close() error {
 		return nil
 	}
 	cs.closed = true
+	backends := cs.backends
+	cs.backends = make(map[string]*sessionBackend)
 	cs.mu.Unlock()
 
 	// cancel context to signal all operations to stop
 	cs.cancel()
 
 	var errs []error
-	for id, backend := range cs.backends {
+	for id, backend := range backends {
 		if err := backend.Close(); err != nil {
 			dl.Log().With("session_id", cs.id).With("backend", id).With("error", err).Warn("error closing backend")
 			errs = append(errs, fmt.Errorf("backend '%s': %w", id, err))
@@ -381,6 +526,13 @@ func (cs *ClientSession) Close() error {
 
 // Close cleans up the backend connection and any subprocess.
 func (sb *sessionBackend) Close() error {
+	sb.closeOnce.Do(func() {
+		sb.closeErr = sb.close()
+	})
+	return sb.closeErr
+}
+
+func (sb *sessionBackend) close() error {
 	var errs []error
 
 	// close MCP session

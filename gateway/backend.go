@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/michaelquigley/df/dd"
@@ -21,18 +22,22 @@ import (
 
 // Backend manages the lifecycle of a zrok share serving MCP with per-client sessions.
 type Backend struct {
-	config          *Config
-	namespace       *aggregator.Namespace
-	sessionFactory  *SessionFactory
-	share           *Share
-	httpServer      *http.Server
-	agoraServer     *http.Server
-	agoraListener   net.Listener
-	agoraSubsystem  *mcpagora.Subsystem
-	connectResolver aggregator.ConnectResolver
-	ipcClient       *ipc.Client
-	ipcCancel       context.CancelFunc
-	mainCtx         context.Context // stored for reconnection callback
+	config           *Config
+	namespace        *aggregator.Namespace
+	sessionFactory   *SessionFactory
+	share            *Share
+	httpServer       *http.Server
+	agoraServer      *http.Server
+	agoraListener    net.Listener
+	agoraSubsystem   *mcpagora.Subsystem
+	connectResolver  aggregator.ConnectResolver
+	ipcClient        *ipc.Client
+	ipcCancel        context.CancelFunc
+	mainCtx          context.Context // stored for reconnection callback
+	resilienceCancel context.CancelFunc
+	resilienceWG     sync.WaitGroup
+	teardownOnce     sync.Once
+	teardownErr      error
 }
 
 // New creates a Backend from config.
@@ -274,21 +279,20 @@ func (b *Backend) Run(ctx context.Context) error {
 	dl.Log().Info("serving mcp-gateway")
 
 	errCh := make(chan error, 2)
-	var servers []*http.Server
 
 	if b.httpServer != nil && b.share != nil {
-		servers = append(servers, b.httpServer)
-		serveHTTP(b.httpServer, b.share.Listener(), errCh, "zrok")
+		resilient := newResilientListener(b.share.Listener())
+		serveHTTP(b.httpServer, resilient, errCh, "zrok")
+		b.startResilience(ctx, resilient)
 		dl.Log().Info("serving mcp over zrok share")
 	}
 
 	if b.agoraServer != nil && b.agoraListener != nil {
-		servers = append(servers, b.agoraServer)
 		serveHTTP(b.agoraServer, b.agoraListener, errCh, "agora")
 		dl.Log().With("listen", b.agoraListener.Addr().String()).Info("serving mcp for agora tunnel")
 	}
 
-	if len(servers) == 0 {
+	if b.httpServer == nil && b.agoraServer == nil {
 		return fmt.Errorf("no gateway listeners are configured")
 	}
 
@@ -296,13 +300,13 @@ func (b *Backend) Run(ctx context.Context) error {
 		if b.config.AgoraServeEnabled() {
 			target := b.agoraServeBackendTarget()
 			if err := b.agoraSubsystem.StartServing(ctx, target); err != nil {
-				shutdownHTTPServers(servers)
+				b.teardown()
 				return err
 			}
 		}
 		if b.config.AgoraPublishEnabled() {
 			if err := b.agoraSubsystem.StartPublishing(ctx); err != nil {
-				shutdownHTTPServers(servers)
+				b.teardown()
 				return err
 			}
 		}
@@ -312,102 +316,165 @@ func (b *Backend) Run(ctx context.Context) error {
 	select {
 	case <-ctx.Done():
 		dl.Log().Info("context cancelled, shutting down")
-		return shutdownHTTPServers(servers)
+		return b.teardown()
 	case err := <-errCh:
-		shutdownHTTPServers(servers)
+		b.teardown()
 		return err
 	}
 }
 
 // Stop gracefully shuts down the share and session factory.
 func (b *Backend) Stop() error {
-	dl.Log().Info("stopping mcp-gateway")
+	return b.teardown()
+}
 
-	var lastErr error
-
-	// report stopping state to orchestrator
-	if b.ipcClient != nil {
-		b.ipcClient.ReportStatus("stopping", nil)
+func (b *Backend) startResilience(ctx context.Context, resilient *resilientListener) {
+	if b.config == nil || !b.config.Resilience.WatchdogEnabled {
+		return
 	}
 
-	// cancel IPC heartbeat loop
-	if b.ipcCancel != nil {
-		b.ipcCancel()
-	}
+	resilienceCtx, cancel := context.WithCancel(ctx)
+	b.resilienceCancel = cancel
 
-	if b.httpServer != nil {
-		if err := b.httpServer.Shutdown(context.Background()); err != nil {
-			dl.Log().With("error", err).Warn("error shutting down server")
-			lastErr = err
+	w := newWatchdog(resilient, b.share.Relisten, b.config.Resilience, b.config.Orchestrator == nil, b.share.Token())
+	b.resilienceWG.Add(1)
+	go func() {
+		defer b.resilienceWG.Done()
+		w.run(resilienceCtx)
+	}()
+
+	if b.config.Resilience.HeartbeatInterval > 0 {
+		b.resilienceWG.Add(1)
+		go func() {
+			defer b.resilienceWG.Done()
+			b.livenessHeartbeat(resilienceCtx, resilient, b.config.Resilience.HeartbeatInterval)
+		}()
+	}
+}
+
+func (b *Backend) livenessHeartbeat(ctx context.Context, resilient *resilientListener, interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			activeSessions := 0
+			if b.sessionFactory != nil {
+				activeSessions = b.sessionFactory.ActiveSessionCount()
+			}
+
+			listener, _ := resilient.Current()
+			_, counter := listenerHealthOf(listener)
+			log := dl.Log().
+				With("active_sessions", activeSessions).
+				With("seconds_since_last_accept", resilient.SecondsSinceLastAccept())
+			if counter != nil {
+				log = log.With("established_terminators", counter.GetEstablishedCount())
+			}
+			log.Info("gateway alive")
+		case <-ctx.Done():
+			return
 		}
 	}
+}
 
-	if b.agoraServer != nil {
-		if err := b.agoraServer.Shutdown(context.Background()); err != nil {
-			dl.Log().With("error", err).Warn("error shutting down agora server")
-			lastErr = err
+func (b *Backend) teardown() error {
+	b.teardownOnce.Do(func() {
+		dl.Log().Info("stopping mcp-gateway")
+
+		var lastErr error
+
+		// report stopping state to orchestrator
+		if b.ipcClient != nil {
+			b.ipcClient.ReportStatus("stopping", nil)
 		}
-	}
 
-	if b.agoraListener != nil {
-		if err := b.agoraListener.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
-			dl.Log().With("error", err).Warn("error closing agora listener")
-			lastErr = err
+		// cancel IPC heartbeat loop
+		if b.ipcCancel != nil {
+			b.ipcCancel()
 		}
-	}
 
-	if b.agoraSubsystem != nil {
-		if err := b.agoraSubsystem.Close(); err != nil {
-			dl.Log().With("error", err).Warn("error closing agora subsystem")
-			lastErr = err
+		if b.resilienceCancel != nil {
+			b.resilienceCancel()
 		}
-	}
+		b.resilienceWG.Wait()
 
-	if b.share != nil {
-		if err := b.share.Close(); err != nil {
-			dl.Log().With("error", err).Warn("error closing share")
-			lastErr = err
+		if b.httpServer != nil {
+			if err := b.httpServer.Shutdown(context.Background()); err != nil {
+				dl.Log().With("error", err).Warn("error shutting down server")
+				lastErr = err
+			}
 		}
-	}
 
-	if b.sessionFactory != nil {
-		if err := b.sessionFactory.Close(); err != nil {
-			dl.Log().With("error", err).Warn("error closing session factory")
-			lastErr = err
+		if b.agoraServer != nil {
+			if err := b.agoraServer.Shutdown(context.Background()); err != nil {
+				dl.Log().With("error", err).Warn("error shutting down agora server")
+				lastErr = err
+			}
 		}
-	}
 
-	// close IPC client
-	if b.ipcClient != nil {
-		if err := b.ipcClient.Close(); err != nil {
-			dl.Log().With("error", err).Warn("error closing ipc client")
-			lastErr = err
+		if b.agoraListener != nil {
+			if err := b.agoraListener.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
+				dl.Log().With("error", err).Warn("error closing agora listener")
+				lastErr = err
+			}
 		}
-	}
 
-	dl.Log().Info("mcp-gateway stopped")
-	return lastErr
+		if b.agoraSubsystem != nil {
+			if err := b.agoraSubsystem.Close(); err != nil {
+				dl.Log().With("error", err).Warn("error closing agora subsystem")
+				lastErr = err
+			}
+		}
+
+		if b.share != nil {
+			if err := b.share.Close(); err != nil {
+				dl.Log().With("error", err).Warn("error closing share")
+				lastErr = err
+			}
+		}
+
+		if b.sessionFactory != nil {
+			if err := b.sessionFactory.Close(); err != nil {
+				dl.Log().With("error", err).Warn("error closing session factory")
+				lastErr = err
+			}
+		}
+
+		// close IPC client
+		if b.ipcClient != nil {
+			if err := b.ipcClient.Close(); err != nil {
+				dl.Log().With("error", err).Warn("error closing ipc client")
+				lastErr = err
+			}
+		}
+
+		b.teardownErr = lastErr
+		dl.Log().Info("mcp-gateway stopped")
+	})
+
+	return b.teardownErr
 }
 
 func serveHTTP(server *http.Server, listener net.Listener, errCh chan<- error, label string) {
 	go func() {
 		err := server.Serve(listener)
 		if err == nil || errors.Is(err, http.ErrServerClosed) || errors.Is(err, net.ErrClosed) {
+			dl.Log().
+				With("listener", label).
+				With("error", err).
+				Info("serve loop returned")
 			errCh <- nil
 			return
 		}
-		errCh <- fmt.Errorf("%s listener failed: %w", label, err)
+		wrapped := fmt.Errorf("%s listener failed: %w", label, err)
+		dl.Log().
+			With("listener", label).
+			With("error", err).
+			Error("serve loop returned")
+		errCh <- wrapped
 	}()
-}
-
-func shutdownHTTPServers(servers []*http.Server) error {
-	var errs []error
-	for _, server := range servers {
-		if err := server.Shutdown(context.Background()); err != nil {
-			errs = append(errs, err)
-		}
-	}
-	return errors.Join(errs...)
 }
 
 func (b *Backend) agoraServeBackendTarget() string {

@@ -1,8 +1,10 @@
 package gateway
 
 import (
+	"errors"
 	"fmt"
 	"net"
+	"sync"
 
 	"github.com/michaelquigley/df/dl"
 	"github.com/openziti/sdk-golang/ziti/edge"
@@ -13,11 +15,13 @@ import (
 
 // Share wraps a zrok share lifecycle.
 type Share struct {
+	mu       sync.Mutex
 	root     env_core.Root
 	share    *sdk.Share
 	listener edge.Listener
 	token    string
 	managed  bool // if true, share is managed by orchestrator (don't delete on close)
+	closed   bool
 }
 
 // NewShare creates a zrok private share.
@@ -106,7 +110,29 @@ func (s *Share) Token() string {
 
 // Listener returns the net.Listener for serving HTTP.
 func (s *Share) Listener() net.Listener {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	return s.listener
+}
+
+// Relisten creates a fresh listener for the existing share token.
+func (s *Share) Relisten() (net.Listener, error) {
+	listener, err := sdk.NewListener(s.token, s.root)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create listener for share '%s': %w", s.token, err)
+	}
+
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		_ = listener.Close()
+		return nil, net.ErrClosed
+	}
+	s.listener = listener
+	s.mu.Unlock()
+
+	dl.Log().With("share_token", s.token).Info("listener ready")
+	return listener, nil
 }
 
 // Close terminates the share and cleans up resources.
@@ -114,22 +140,35 @@ func (s *Share) Listener() net.Listener {
 func (s *Share) Close() error {
 	var lastErr error
 
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return nil
+	}
+	s.closed = true
+	listener := s.listener
+	root := s.root
+	share := s.share
+	managed := s.managed
+	token := s.token
+	s.mu.Unlock()
+
 	// close listener first
-	if s.listener != nil {
-		if err := s.listener.Close(); err != nil {
+	if listener != nil {
+		if err := listener.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
 			dl.Log().With("error", err).Warn("error closing listener")
 			lastErr = err
 		}
 	}
 
 	// delete the share only in standalone mode (not managed by orchestrator)
-	if !s.managed && s.share != nil && s.root != nil {
-		if err := sdk.DeleteShare(s.root, s.share); err != nil {
+	if !managed && share != nil && root != nil {
+		if err := sdk.DeleteShare(root, share); err != nil {
 			dl.Log().With("error", err).Warn("error deleting share")
 			lastErr = err
 		}
 	}
 
-	dl.Log().With("share_token", s.token).Info("share closed")
+	dl.Log().With("share_token", token).Info("share closed")
 	return lastErr
 }
