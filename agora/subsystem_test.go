@@ -2,8 +2,8 @@ package agora
 
 import (
 	"context"
-	"errors"
 	"fmt"
+	"net"
 	"strings"
 	"testing"
 
@@ -12,23 +12,51 @@ import (
 	"github.com/openziti/agora/sdk/agent/tunnel"
 )
 
+// fakeListener is a minimal net.Listener that records when it is closed.
+type fakeListener struct {
+	closed bool
+}
+
+func (f *fakeListener) Accept() (net.Conn, error) { return nil, net.ErrClosed }
+func (f *fakeListener) Close() error              { f.closed = true; return nil }
+func (f *fakeListener) Addr() net.Addr {
+	return &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0}
+}
+
+// fakeOps is a tiny in-memory controller standing in for the Agora SDK
+// primitives so the subsystem stays unit-testable without a live controller.
 type fakeOps struct {
 	rootEndpoint string
 	rootSource   string
-	envEndpoint  string
 
-	newOpts      agent.StandaloneOptions
-	starts       int
-	connectSpecs []tunnel.ConnectSpec
-	serveSpecs   []tunnel.ServeSpec
+	newOpts agent.StandaloneOptions
+
+	// tunnels models the controller's tunnel records: name -> mode.
+	tunnels map[string]string
+
+	// behavior toggles
+	listenErr      error
+	listenErrAfter int // apply listenErr once listen calls exceed this count
+	createErr      error
+	createConflict bool // Create simulates losing a create race
+	attachErr      error
+	publishErr     error
+
+	// recordings
+	created      []tunnel.Spec
+	deleted      []string
+	attached     []string
+	detached     []string
+	dialed       []string
 	publishSpecs []catalog.PublishSpec
-	removed      []string
+	listeners    []*fakeListener
 	sequence     []string
+	listenCalls  int
 	closed       int
+}
 
-	connectErr error
-	serveErr   error
-	publishErr error
+func newFakeOps() *fakeOps {
+	return &fakeOps{rootEndpoint: "http://controller.example", tunnels: map[string]string{}}
 }
 
 func (f *fakeOps) NewStandalone(opts agent.StandaloneOptions) (any, error) {
@@ -43,42 +71,69 @@ func (f *fakeOps) RootAPIEndpoint(any) (string, string) {
 	return f.rootEndpoint, f.rootSource
 }
 
-func (f *fakeOps) EnvironmentAPIEndpoint(any) (string, bool) {
-	return f.envEndpoint, f.envEndpoint != ""
+func (f *fakeOps) Create(_ context.Context, _ any, spec tunnel.Spec) (*tunnel.Tunnel, error) {
+	f.created = append(f.created, spec)
+	f.sequence = append(f.sequence, "create:"+spec.Name)
+	if f.createConflict {
+		f.tunnels[spec.Name] = "tcp" // a racing process provisioned it
+		return nil, fmt.Errorf("create: %w", tunnel.ErrConflict)
+	}
+	if f.createErr != nil {
+		return nil, f.createErr
+	}
+	if _, ok := f.tunnels[spec.Name]; ok {
+		return nil, fmt.Errorf("create: %w", tunnel.ErrConflict)
+	}
+	f.tunnels[spec.Name] = string(spec.Mode)
+	return &tunnel.Tunnel{ID: "tt_" + spec.Name, Name: spec.Name, Mode: spec.Mode}, nil
 }
 
-func (f *fakeOps) StartRuntime(context.Context, any) error {
-	f.starts++
-	f.sequence = append(f.sequence, "start")
+func (f *fakeOps) GetTunnel(_ context.Context, _ any, name string) (*tunnel.Tunnel, error) {
+	mode, ok := f.tunnels[name]
+	if !ok {
+		return nil, fmt.Errorf("get %q: %w", name, tunnel.ErrNotFound)
+	}
+	return &tunnel.Tunnel{ID: "tt_" + name, Name: name, Mode: tunnel.Mode(mode)}, nil
+}
+
+func (f *fakeOps) Listen(_ context.Context, _ any, name string) (net.Listener, error) {
+	f.listenCalls++
+	f.sequence = append(f.sequence, "listen:"+name)
+	if f.listenErr != nil && f.listenCalls > f.listenErrAfter {
+		return nil, f.listenErr
+	}
+	if _, ok := f.tunnels[name]; !ok {
+		return nil, fmt.Errorf("listen %q: %w", name, tunnel.ErrNotFound)
+	}
+	l := &fakeListener{}
+	f.listeners = append(f.listeners, l)
+	return l, nil
+}
+
+func (f *fakeOps) Delete(_ context.Context, _ any, t *tunnel.Tunnel) error {
+	f.deleted = append(f.deleted, t.Name)
+	f.sequence = append(f.sequence, "delete")
+	delete(f.tunnels, t.Name)
 	return nil
 }
 
-func (f *fakeOps) EnsureConnected(_ context.Context, _ any, spec tunnel.ConnectSpec) (*tunnel.ConnectStatus, error) {
-	if f.connectErr != nil {
-		return nil, f.connectErr
+func (f *fakeOps) Attach(_ context.Context, _ any, name string) (*tunnel.Attachment, error) {
+	if f.attachErr != nil {
+		return nil, f.attachErr
 	}
-	f.connectSpecs = append(f.connectSpecs, spec)
-	f.sequence = append(f.sequence, "connect:"+spec.Name)
-	return &tunnel.ConnectStatus{Name: spec.Name, ListenAddress: spec.ListenAddress}, nil
+	f.attached = append(f.attached, name)
+	f.sequence = append(f.sequence, "attach:"+name)
+	return &tunnel.Attachment{ID: "ta_" + name, TunnelID: "tt_" + name}, nil
 }
 
-func (f *fakeOps) RemoveConnect(_ context.Context, _ any, name, listenAddress string) error {
-	f.removed = append(f.removed, "connect:"+name+"@"+listenAddress)
-	f.sequence = append(f.sequence, "remove-connect")
-	return nil
+func (f *fakeOps) Dial(_ context.Context, _ any, name string) (net.Conn, error) {
+	f.dialed = append(f.dialed, name)
+	return nil, fmt.Errorf("dialed %q", name)
 }
 
-func (f *fakeOps) EnsureServed(_ context.Context, _ any, spec tunnel.ServeSpec) (*tunnel.ServeStatus, error) {
-	if f.serveErr != nil {
-		return nil, f.serveErr
-	}
-	f.serveSpecs = append(f.serveSpecs, spec)
-	f.sequence = append(f.sequence, "serve")
-	return &tunnel.ServeStatus{Name: spec.Name, Mode: spec.Mode, BackendTarget: spec.BackendTarget}, nil
-}
-
-func (f *fakeOps) RemoveServe(context.Context, any, string) error {
-	f.sequence = append(f.sequence, "remove-serve")
+func (f *fakeOps) Detach(_ context.Context, _ any, name string) error {
+	f.detached = append(f.detached, name)
+	f.sequence = append(f.sequence, "detach:"+name)
 	return nil
 }
 
@@ -102,151 +157,80 @@ func (f *fakeOps) Close(context.Context, any) error {
 	return nil
 }
 
-func TestSubsystemBootstrapConnects(t *testing.T) {
-	stubConnectAddress(t)
-	ops := &fakeOps{rootEndpoint: "http://controller.example", envEndpoint: "http://controller.example"}
-	cfg := baseTestConfig()
-	cfg.Advertisement.Publish = boolPtr(false)
-
-	subsystem, err := newSubsystemWithOps(SubsystemOptions{
-		Config: cfg,
-		Defaults: Defaults{
-			InstanceName:    "mcp-gateway",
-			Description:     "MCP tool gateway",
-			TunnelMode:      "tcp",
-			AgentNamePrefix: "mcp-gateway",
-		},
-		ConnectTargets: []ConnectTarget{{Key: "filesystem", Tunnel: "filesystem-relay"}},
-	}, ops)
-	if err != nil {
-		t.Fatalf("newSubsystemWithOps returned error: %v", err)
-	}
-	if !ops.newOpts.WithRuntime {
-		t.Fatal("expected standalone agent with runtime")
-	}
-	if err := subsystem.BootstrapConnects(context.Background()); err != nil {
-		t.Fatalf("BootstrapConnects returned error: %v", err)
-	}
-	if ops.starts != 1 {
-		t.Fatalf("StartRuntime calls = %d, want 1", ops.starts)
-	}
-	if len(ops.connectSpecs) != 1 || ops.connectSpecs[0].Name != "filesystem-relay" {
-		t.Fatalf("unexpected connect specs: %#v", ops.connectSpecs)
-	}
-	if !strings.HasPrefix(ops.connectSpecs[0].ListenAddress, "127.0.0.1:") {
-		t.Fatalf("listen address = %q", ops.connectSpecs[0].ListenAddress)
-	}
-	if address, ok := subsystem.ConnectAddress("filesystem"); !ok || address != ops.connectSpecs[0].ListenAddress {
-		t.Fatalf("ConnectAddress = %q, %v", address, ok)
-	}
-}
-
-func TestSubsystemServingAndPublishingAreIndependent(t *testing.T) {
-	ops := &fakeOps{rootEndpoint: "http://controller.example", envEndpoint: "http://controller.example"}
-	cfg := baseTestConfig()
-	cfg.Serve = &ServeConfig{Enabled: true, Grants: []string{"alice@example.com"}}
-
-	subsystem, err := newSubsystemWithOps(SubsystemOptions{
-		Config:        cfg,
-		Defaults:      gatewayDefaults(),
-		Capabilities:  []string{"mcp-tools"},
-		ServeWanted:   true,
-		PublishWanted: true,
-	}, ops)
-	if err != nil {
-		t.Fatalf("newSubsystemWithOps returned error: %v", err)
-	}
-	if err := subsystem.StartServing(context.Background(), "127.0.0.1:8080"); err != nil {
-		t.Fatalf("StartServing returned error: %v", err)
-	}
-	if len(ops.serveSpecs) != 1 {
-		t.Fatalf("serve specs = %#v", ops.serveSpecs)
-	}
-	if len(ops.publishSpecs) != 0 {
-		t.Fatalf("publishing should be independent of serving: %#v", ops.publishSpecs)
-	}
-	if err := subsystem.StartPublishing(context.Background()); err != nil {
-		t.Fatalf("StartPublishing returned error: %v", err)
-	}
-	if len(ops.publishSpecs) != 1 {
-		t.Fatalf("publish specs = %#v", ops.publishSpecs)
-	}
-	if got := ops.sequence; len(got) < 3 || got[0] != "start" || got[1] != "serve" || got[2] != "publish" {
-		t.Fatalf("unexpected sequence: %#v", got)
-	}
-}
-
-func TestSubsystemPublishesWithoutServeRuntime(t *testing.T) {
-	ops := &fakeOps{rootEndpoint: "http://controller.example"}
-	cfg := baseTestConfig()
-
-	subsystem, err := newSubsystemWithOps(SubsystemOptions{
-		Config:        cfg,
+func TestNewSubsystemUsesRuntimelessAgent(t *testing.T) {
+	ops := newFakeOps()
+	sub, err := newSubsystemWithOps(SubsystemOptions{
+		Config:        baseTestConfig(),
 		Defaults:      gatewayDefaults(),
 		Capabilities:  []string{"mcp-tools"},
 		PublishWanted: true,
 	}, ops)
 	if err != nil {
 		t.Fatalf("newSubsystemWithOps returned error: %v", err)
+	}
+	if sub == nil {
+		t.Fatal("expected subsystem")
 	}
 	if ops.newOpts.WithRuntime {
-		t.Fatal("expected publish-only agent without runtime")
-	}
-	if err := subsystem.StartPublishing(context.Background()); err != nil {
-		t.Fatalf("StartPublishing returned error: %v", err)
-	}
-	if ops.starts != 0 {
-		t.Fatalf("StartRuntime calls = %d, want 0", ops.starts)
-	}
-	if len(ops.publishSpecs) != 1 {
-		t.Fatalf("publish specs = %#v", ops.publishSpecs)
-	}
-	if ops.publishSpecs[0].Capabilities[0].Name != "mcp-tools" {
-		t.Fatalf("capabilities = %#v", ops.publishSpecs[0].Capabilities)
+		t.Fatal("expected runtime-less agent (WithRuntime=false)")
 	}
 }
 
-func TestSubsystemCloseOrder(t *testing.T) {
-	stubConnectAddress(t)
-	ops := &fakeOps{rootEndpoint: "http://controller.example", envEndpoint: "http://controller.example"}
-	cfg := baseTestConfig()
-	cfg.Serve = &ServeConfig{Enabled: true}
-
-	subsystem, err := newSubsystemWithOps(SubsystemOptions{
-		Config:         cfg,
-		Defaults:       gatewayDefaults(),
-		Capabilities:   []string{"mcp-tools"},
-		ConnectTargets: []ConnectTarget{{Key: "filesystem", Tunnel: "filesystem-relay"}},
-		ServeWanted:    true,
-		PublishWanted:  true,
+func TestSubsystemPublishesHTTPModeWithDialKeyName(t *testing.T) {
+	ops := newFakeOps()
+	sub, err := newSubsystemWithOps(SubsystemOptions{
+		Config:        baseTestConfig(),
+		Defaults:      gatewayDefaults(),
+		Capabilities:  []string{"mcp-tools"},
+		PublishWanted: true,
 	}, ops)
 	if err != nil {
 		t.Fatalf("newSubsystemWithOps returned error: %v", err)
 	}
-	if err := subsystem.BootstrapConnects(context.Background()); err != nil {
-		t.Fatalf("BootstrapConnects returned error: %v", err)
-	}
-	if err := subsystem.StartServing(context.Background(), "127.0.0.1:8080"); err != nil {
-		t.Fatalf("StartServing returned error: %v", err)
-	}
-	if err := subsystem.StartPublishing(context.Background()); err != nil {
+	if err := sub.StartPublishing(context.Background()); err != nil {
 		t.Fatalf("StartPublishing returned error: %v", err)
 	}
-	if err := subsystem.Close(); err != nil {
-		t.Fatalf("Close returned error: %v", err)
+	if len(ops.publishSpecs) != 1 {
+		t.Fatalf("publish specs = %#v", ops.publishSpecs)
 	}
+	spec := ops.publishSpecs[0]
+	// serve.tunnel unset ⇒ advertised name follows instance name.
+	if spec.Name != "engineering" {
+		t.Fatalf("publish name = %q, want %q", spec.Name, "engineering")
+	}
+	if spec.TunnelMode != catalog.TunnelHTTP {
+		t.Fatalf("publish tunnel mode = %q, want %q", spec.TunnelMode, catalog.TunnelHTTP)
+	}
+	if len(spec.Capabilities) == 0 || spec.Capabilities[0].Name != "mcp-tools" {
+		t.Fatalf("capabilities = %#v", spec.Capabilities)
+	}
+}
 
-	wantSuffix := []string{"retract", "remove-serve", "remove-connect", "close"}
-	got := ops.sequence[len(ops.sequence)-len(wantSuffix):]
-	for i := range wantSuffix {
-		if got[i] != wantSuffix[i] {
-			t.Fatalf("cleanup sequence = %#v, want suffix %#v", ops.sequence, wantSuffix)
-		}
+func TestSubsystemPublishNameFollowsServeTunnel(t *testing.T) {
+	cfg := baseTestConfig()
+	cfg.Serve = &ServeConfig{Enabled: true, Tunnel: "persistent-share"}
+
+	ops := newFakeOps()
+	sub, err := newSubsystemWithOps(SubsystemOptions{
+		Config:        cfg,
+		Defaults:      gatewayDefaults(),
+		Capabilities:  []string{"mcp-tools"},
+		PublishWanted: true, // serve not wanted in this process; name still resolves
+	}, ops)
+	if err != nil {
+		t.Fatalf("newSubsystemWithOps returned error: %v", err)
+	}
+	if err := sub.StartPublishing(context.Background()); err != nil {
+		t.Fatalf("StartPublishing returned error: %v", err)
+	}
+	if got := ops.publishSpecs[0].Name; got != "persistent-share" {
+		t.Fatalf("publish name = %q, want %q (must follow serve.tunnel, not instance_name)", got, "persistent-share")
 	}
 }
 
 func TestSubsystemEndpointMismatchFails(t *testing.T) {
-	ops := &fakeOps{rootEndpoint: "http://other.example", envEndpoint: "http://other.example"}
+	ops := newFakeOps()
+	ops.rootEndpoint = "http://other.example"
 	_, err := newSubsystemWithOps(SubsystemOptions{
 		Config:        baseTestConfig(),
 		Defaults:      gatewayDefaults(),
@@ -258,34 +242,8 @@ func TestSubsystemEndpointMismatchFails(t *testing.T) {
 	}
 }
 
-func TestSubsystemConnectFailureCleansUp(t *testing.T) {
-	stubConnectAddress(t)
-	ops := &fakeOps{
-		rootEndpoint: "http://controller.example",
-		envEndpoint:  "http://controller.example",
-		connectErr:   errors.New("boom"),
-	}
-	cfg := baseTestConfig()
-	cfg.Advertisement.Publish = boolPtr(false)
-
-	subsystem, err := newSubsystemWithOps(SubsystemOptions{
-		Config:         cfg,
-		Defaults:       gatewayDefaults(),
-		ConnectTargets: []ConnectTarget{{Key: "filesystem", Tunnel: "filesystem-relay"}},
-	}, ops)
-	if err != nil {
-		t.Fatalf("newSubsystemWithOps returned error: %v", err)
-	}
-	if err := subsystem.BootstrapConnects(context.Background()); err == nil {
-		t.Fatal("expected connect failure")
-	}
-	if ops.closed != 1 {
-		t.Fatalf("Close calls = %d, want 1", ops.closed)
-	}
-}
-
 func TestSubsystemRequiresCapabilitiesWhenPublishing(t *testing.T) {
-	ops := &fakeOps{rootEndpoint: "http://controller.example"}
+	ops := newFakeOps()
 	_, err := newSubsystemWithOps(SubsystemOptions{
 		Config:        baseTestConfig(),
 		Defaults:      gatewayDefaults(),
@@ -296,12 +254,51 @@ func TestSubsystemRequiresCapabilitiesWhenPublishing(t *testing.T) {
 	}
 }
 
+func TestSubsystemCloseOrder(t *testing.T) {
+	cfg := baseTestConfig()
+	cfg.Serve = &ServeConfig{Enabled: true}
+
+	ops := newFakeOps()
+	sub, err := newSubsystemWithOps(SubsystemOptions{
+		Config:        cfg,
+		Defaults:      gatewayDefaults(),
+		Capabilities:  []string{"mcp-tools"},
+		ServeWanted:   true,
+		PublishWanted: true,
+	}, ops)
+	if err != nil {
+		t.Fatalf("newSubsystemWithOps returned error: %v", err)
+	}
+	if _, err := sub.Serve(context.Background()); err != nil {
+		t.Fatalf("Serve returned error: %v", err)
+	}
+	if err := sub.Dialer().Attach(context.Background(), "relay"); err != nil {
+		t.Fatalf("Attach returned error: %v", err)
+	}
+	if err := sub.StartPublishing(context.Background()); err != nil {
+		t.Fatalf("StartPublishing returned error: %v", err)
+	}
+	if err := sub.Close(); err != nil {
+		t.Fatalf("Close returned error: %v", err)
+	}
+
+	want := []string{"retract", "delete", "detach:relay", "close"}
+	if len(ops.sequence) < len(want) {
+		t.Fatalf("sequence too short: %#v", ops.sequence)
+	}
+	got := ops.sequence[len(ops.sequence)-len(want):]
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("cleanup sequence = %#v, want suffix %#v", ops.sequence, want)
+		}
+	}
+}
+
 func baseTestConfig() *Config {
 	return &Config{
 		Enabled:      true,
 		APIEndpoint:  "http://controller.example",
 		InstanceName: "engineering",
-		TunnelMode:   "tcp",
 		Advertisement: &AdvertisementConfig{
 			WorkgroupIDs: []string{"wg_abcdefghijkl"},
 			ContractID:   "con_abcdefghijkl",
@@ -313,25 +310,28 @@ func gatewayDefaults() Defaults {
 	return Defaults{
 		InstanceName:    "mcp-gateway",
 		Description:     "MCP tool gateway",
-		TunnelMode:      "tcp",
 		AgentNamePrefix: "mcp-gateway",
 	}
 }
 
-func boolPtr(v bool) *bool {
-	return &v
-}
-
-func stubConnectAddress(t *testing.T) {
+// newTestSubsystem builds a subsystem backed by a fresh fakeOps for serve/dial
+// tests, returning both so the test can configure and inspect the fake.
+func newTestSubsystem(t *testing.T, configure func(*Config)) (*Subsystem, *fakeOps) {
 	t.Helper()
 
-	orig := allocateConnectAddress
-	next := 0
-	allocateConnectAddress = func() (string, error) {
-		next++
-		return fmt.Sprintf("127.0.0.1:%d", 40000+next), nil
+	cfg := baseTestConfig()
+	if configure != nil {
+		configure(cfg)
 	}
-	t.Cleanup(func() {
-		allocateConnectAddress = orig
-	})
+	ops := newFakeOps()
+	sub, err := newSubsystemWithOps(SubsystemOptions{
+		Config:       cfg,
+		Defaults:     gatewayDefaults(),
+		Capabilities: []string{"mcp-tools"},
+		ServeWanted:  ServeEnabled(cfg),
+	}, ops)
+	if err != nil {
+		t.Fatalf("newSubsystemWithOps returned error: %v", err)
+	}
+	return sub, ops
 }

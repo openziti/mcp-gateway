@@ -6,7 +6,7 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/michaelquigley/df v0.3.14
 	github.com/modelcontextprotocol/go-sdk v1.1.0
-	github.com/openziti/agora v0.1.0
+	github.com/openziti/agora v0.1.2
 	github.com/openziti/sdk-golang v1.5.4
 	github.com/openziti/zrok/v2 v2.0.0-rc7
 	github.com/pkg/errors v0.9.1
@@ -118,3 +118,7 @@ require (
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 	nhooyr.io/websocket v1.8.17 // indirect
 )
+
+// TODO(agora-release): temporary local replace while the L1 Listen/Dial
+// primitives live on untagged agora HEAD; swap to a tagged release before merge.
+replace github.com/openziti/agora => /home/michael/Repos/nf/agora

@@ -2,43 +2,51 @@ package aggregator
 
 import (
 	"context"
+	"errors"
+	"net/http"
 	"strings"
 	"testing"
 )
 
-func TestConnectAgoraBackendRequiresResolver(t *testing.T) {
+func TestConnectAgoraBackendRequiresDialClient(t *testing.T) {
 	manager := NewBackendManager(testAgoraManagerConfig())
 
 	_, err := manager.connectBackend(context.Background(), testAgoraBackendConfig())
-	if err == nil || !strings.Contains(err.Error(), "agora connect resolver is not configured") {
-		t.Fatalf("expected missing resolver error, got %v", err)
+	if err == nil || !strings.Contains(err.Error(), "agora dial client is not configured") {
+		t.Fatalf("expected missing dial client error, got %v", err)
 	}
 }
 
-func TestConnectAgoraBackendRequiresResolvedAddress(t *testing.T) {
+func TestResolveAgoraDialClientReturnsConfigured(t *testing.T) {
 	manager := NewBackendManager(testAgoraManagerConfig())
-	manager.SetConnectResolver(func(string) (string, bool) {
-		return "", false
+	want := &http.Client{}
+	var gotTunnel string
+	manager.SetAgoraDialClient(func(tunnel string) (*http.Client, error) {
+		gotTunnel = tunnel
+		return want, nil
 	})
 
-	_, err := manager.connectBackend(context.Background(), testAgoraBackendConfig())
-	if err == nil || !strings.Contains(err.Error(), "agora connect address for backend 'remote' was not initialized") {
-		t.Fatalf("expected unresolved address error, got %v", err)
-	}
-}
-
-func TestResolveAgoraLoopbackTrimsAddress(t *testing.T) {
-	manager := NewBackendManager(testAgoraManagerConfig())
-	manager.SetConnectResolver(func(string) (string, bool) {
-		return " 127.0.0.1:43210 ", true
-	})
-
-	address, err := manager.resolveAgoraLoopback("remote")
+	got, err := manager.resolveAgoraDialClient(testAgoraBackendConfig())
 	if err != nil {
-		t.Fatalf("resolveAgoraLoopback returned error: %v", err)
+		t.Fatalf("resolveAgoraDialClient returned error: %v", err)
 	}
-	if address != "127.0.0.1:43210" {
-		t.Fatalf("address = %q", address)
+	if got != want {
+		t.Fatal("expected the configured dial client")
+	}
+	if gotTunnel != "filesystem-relay" {
+		t.Fatalf("dial client resolved for tunnel %q", gotTunnel)
+	}
+}
+
+func TestResolveAgoraDialClientPropagatesError(t *testing.T) {
+	manager := NewBackendManager(testAgoraManagerConfig())
+	manager.SetAgoraDialClient(func(string) (*http.Client, error) {
+		return nil, errors.New("tunnel was not attached at startup")
+	})
+
+	_, err := manager.resolveAgoraDialClient(testAgoraBackendConfig())
+	if err == nil || !strings.Contains(err.Error(), "was not attached at startup") {
+		t.Fatalf("expected propagated dial error, got %v", err)
 	}
 }
 

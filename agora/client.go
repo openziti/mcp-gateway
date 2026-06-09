@@ -3,10 +3,9 @@ package agora
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"strings"
 )
-
-const dialTargetKey = "target"
 
 // ClientOptions configures an Agora dial-only client.
 type ClientOptions struct {
@@ -14,10 +13,12 @@ type ClientOptions struct {
 	Defaults Defaults
 }
 
-// Client wraps the shared subsystem for dial-only use.
+// Client wraps the shared subsystem for dial-only use (mcp-tools). It is the
+// gateway dial pattern specialized to a single tunnel and process.
 type Client struct {
 	opts      ClientOptions
 	subsystem *Subsystem
+	tunnel    string
 }
 
 // NewClient creates a dial-only Agora client.
@@ -31,9 +32,6 @@ func NewClient(opts ClientOptions) (*Client, error) {
 	if strings.TrimSpace(opts.Defaults.Description) == "" {
 		opts.Defaults.Description = "MCP tools client"
 	}
-	if strings.TrimSpace(opts.Defaults.TunnelMode) == "" {
-		opts.Defaults.TunnelMode = "tcp"
-	}
 	if strings.TrimSpace(opts.Defaults.AgentNamePrefix) == "" {
 		opts.Defaults.AgentNamePrefix = "mcp-tools"
 	}
@@ -41,48 +39,50 @@ func NewClient(opts ClientOptions) (*Client, error) {
 	return &Client{opts: opts}, nil
 }
 
-// Dial connects to an Agora Layer 1 tunnel and returns the local loopback address.
-func (c *Client) Dial(ctx context.Context, service string) (string, error) {
+// Attach reserves the dialer attachment for the tunnel once and returns the
+// shared HTTP client routed through it. The MCP HTTP/SSE transport binds the
+// returned client directly; the dummy host it is given is ignored by the
+// dialer's DialContext.
+func (c *Client) Attach(ctx context.Context, service string) (*http.Client, error) {
 	if c == nil {
-		return "", fmt.Errorf("agora client is nil")
+		return nil, fmt.Errorf("agora client is nil")
 	}
 	service = strings.TrimSpace(service)
 	if service == "" {
-		return "", fmt.Errorf("agora tunnel is required")
+		return nil, fmt.Errorf("agora tunnel is required")
 	}
 	if c.subsystem != nil {
-		return "", fmt.Errorf("agora client already dialed")
+		return nil, fmt.Errorf("agora client already attached")
 	}
 
 	subsystem, err := NewSubsystem(SubsystemOptions{
 		Config:   c.opts.Config,
 		Defaults: c.opts.Defaults,
-		ConnectTargets: []ConnectTarget{{
-			Key:    dialTargetKey,
-			Tunnel: service,
-		}},
-		ServeWanted:   false,
-		PublishWanted: false,
 	})
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	if subsystem == nil {
-		return "", fmt.Errorf("agora subsystem was not initialized")
+		return nil, fmt.Errorf("agora subsystem was not initialized")
 	}
 	c.subsystem = subsystem
+	c.tunnel = service
 
-	if err := c.subsystem.BootstrapConnects(ctx); err != nil {
-		return "", err
+	if err := subsystem.Dialer().Attach(ctx, service); err != nil {
+		return nil, err
 	}
-	loopbackAddr, ok := c.subsystem.ConnectAddress(dialTargetKey)
-	if !ok {
-		return "", fmt.Errorf("agora connect address for tunnel '%s' was not initialized", service)
-	}
-	return loopbackAddr, nil
+	return subsystem.Dialer().HTTPClient(service)
 }
 
-// Close closes any active Agora dial resources.
+// HTTPClient returns the shared client for the attached tunnel.
+func (c *Client) HTTPClient() (*http.Client, error) {
+	if c == nil || c.subsystem == nil {
+		return nil, fmt.Errorf("agora client is not attached")
+	}
+	return c.subsystem.Dialer().HTTPClient(c.tunnel)
+}
+
+// Close detaches the tunnel and tears down the dial subsystem.
 func (c *Client) Close() error {
 	if c == nil || c.subsystem == nil {
 		return nil

@@ -1,50 +1,11 @@
 package gateway
 
 import (
-	"net"
 	"testing"
 
 	"github.com/openziti/mcp-gateway/aggregator"
 	mcpagora "github.com/openziti/mcp-gateway/agora"
 )
-
-type fakeListener struct {
-	addr net.Addr
-}
-
-func (f fakeListener) Accept() (net.Conn, error) {
-	return nil, net.ErrClosed
-}
-
-func (f fakeListener) Close() error {
-	return nil
-}
-
-func (f fakeListener) Addr() net.Addr {
-	return f.addr
-}
-
-func TestAgoraServeBackendTargetFormatsByTunnelMode(t *testing.T) {
-	tcpBackend := &Backend{
-		config: &Config{Agora: &mcpagora.Config{TunnelMode: "tcp"}},
-		agoraListener: fakeListener{
-			addr: &net.TCPAddr{IP: net.ParseIP("127.0.0.1"), Port: 43210},
-		},
-	}
-	if got := tcpBackend.agoraServeBackendTarget(); got != "127.0.0.1:43210" {
-		t.Fatalf("tcp backend target = %q", got)
-	}
-
-	httpBackend := &Backend{
-		config: &Config{Agora: &mcpagora.Config{TunnelMode: "http"}},
-		agoraListener: fakeListener{
-			addr: &net.TCPAddr{IP: net.ParseIP("127.0.0.1"), Port: 43211},
-		},
-	}
-	if got := httpBackend.agoraServeBackendTarget(); got != "http://127.0.0.1:43211" {
-		t.Fatalf("http backend target = %q", got)
-	}
-}
 
 func TestGatewayCapabilityExtrasSortsBackendIDsAndAddsServeTag(t *testing.T) {
 	cfg := &Config{
@@ -70,28 +31,33 @@ func TestGatewayCapabilityExtrasSortsBackendIDsAndAddsServeTag(t *testing.T) {
 	}
 }
 
-func TestCollectAgoraConnectTargets(t *testing.T) {
-	targets := collectAgoraConnectTargets([]aggregator.BackendConfig{
+func TestCollectAgoraTunnelsDedupes(t *testing.T) {
+	tunnels := collectAgoraTunnels([]aggregator.BackendConfig{
 		{
-			ID: "filesystem",
-			Transport: aggregator.TransportConfig{
-				Type:        "agora",
-				AgoraTunnel: " filesystem-relay ",
-			},
+			ID:        "filesystem",
+			Transport: aggregator.TransportConfig{Type: "agora", AgoraTunnel: " filesystem-relay "},
 		},
 		{
-			ID: "github",
-			Transport: aggregator.TransportConfig{
-				Type:       "zrok",
-				ShareToken: "share",
-			},
+			ID:        "filesystem-2",
+			Transport: aggregator.TransportConfig{Type: "agora", AgoraTunnel: "filesystem-relay"},
+		},
+		{
+			ID:        "github",
+			Transport: aggregator.TransportConfig{Type: "zrok", ShareToken: "share"},
+		},
+		{
+			ID:        "notes",
+			Transport: aggregator.TransportConfig{Type: "agora", AgoraTunnel: "notes-relay"},
 		},
 	})
 
-	if len(targets) != 1 {
-		t.Fatalf("targets = %#v", targets)
+	want := []string{"filesystem-relay", "notes-relay"}
+	if len(tunnels) != len(want) {
+		t.Fatalf("tunnels = %#v, want %#v", tunnels, want)
 	}
-	if targets[0].Key != "filesystem" || targets[0].Tunnel != "filesystem-relay" {
-		t.Fatalf("unexpected target: %#v", targets[0])
+	for i := range want {
+		if tunnels[i] != want[i] {
+			t.Fatalf("tunnels = %#v, want %#v", tunnels, want)
+		}
 	}
 }

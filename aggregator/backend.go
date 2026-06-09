@@ -27,14 +27,17 @@ type Backend struct {
 
 // BackendManager manages connections to multiple backend MCP servers.
 type BackendManager struct {
-	backends        map[string]*Backend
-	config          *Config
-	connectResolver ConnectResolver
-	mu              sync.RWMutex
+	backends  map[string]*Backend
+	config    *Config
+	agoraDial AgoraDialClient
+	mu        sync.RWMutex
 }
 
-// ConnectResolver resolves an Agora backend ID to its local loopback address.
-type ConnectResolver func(backendID string) (loopbackAddr string, ok bool)
+// AgoraDialClient returns the shared *http.Client for an Agora tunnel. It is a
+// pure accessor over clients attached at startup — no ctx, since attaching has
+// already happened — injected to keep the aggregator decoupled from the agora
+// package, the same way the loopback resolver used to be.
+type AgoraDialClient func(tunnel string) (*http.Client, error)
 
 // NewBackendManager creates a new manager for backend connections.
 func NewBackendManager(cfg *Config) *BackendManager {
@@ -44,9 +47,9 @@ func NewBackendManager(cfg *Config) *BackendManager {
 	}
 }
 
-// SetConnectResolver sets the resolver used for Agora backends.
-func (m *BackendManager) SetConnectResolver(resolver ConnectResolver) {
-	m.connectResolver = resolver
+// SetAgoraDialClient sets the dial seam used for Agora backends.
+func (m *BackendManager) SetAgoraDialClient(dial AgoraDialClient) {
+	m.agoraDial = dial
 }
 
 // Connect establishes connections to all configured backends.
@@ -198,9 +201,10 @@ func (m *BackendManager) connectZrokBackend(ctx context.Context, cfg BackendConf
 	}, nil
 }
 
-// connectAgoraBackend establishes a connection to a remote Agora backend.
+// connectAgoraBackend establishes a connection to a remote Agora backend by
+// dialing its tunnel directly through the startup-attached shared HTTP client.
 func (m *BackendManager) connectAgoraBackend(ctx context.Context, cfg BackendConfig) (*Backend, error) {
-	loopbackAddr, err := m.resolveAgoraLoopback(cfg.ID)
+	httpClient, err := m.resolveAgoraDialClient(cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -214,8 +218,9 @@ func (m *BackendManager) connectAgoraBackend(ctx context.Context, cfg BackendCon
 	)
 
 	sseTransport := &mcp.SSEClientTransport{
-		Endpoint:   "http://" + loopbackAddr + "/sse",
-		HTTPClient: http.DefaultClient,
+		// the host doesn't matter for routing since agora handles it
+		Endpoint:   "http://mcp-backend/sse",
+		HTTPClient: httpClient,
 	}
 
 	session, err := ConnectWithTimeout(ctx, m.config.Aggregator.Connection.ConnectTimeout, func(connectCtx context.Context) (*mcp.ClientSession, error) {
@@ -239,7 +244,7 @@ func (m *BackendManager) connectAgoraBackend(ctx context.Context, cfg BackendCon
 		name = cfg.ID
 	}
 
-	dl.Log().With("backend", cfg.ID).With("agora_tunnel", cfg.Transport.AgoraTunnel).With("loopback", loopbackAddr).Info("connected to agora backend")
+	dl.Log().With("backend", cfg.ID).With("agora_tunnel", cfg.Transport.AgoraTunnel).Info("connected to agora backend")
 
 	return &Backend{
 		id:      cfg.ID,
@@ -250,15 +255,19 @@ func (m *BackendManager) connectAgoraBackend(ctx context.Context, cfg BackendCon
 	}, nil
 }
 
-func (m *BackendManager) resolveAgoraLoopback(backendID string) (string, error) {
-	if m.connectResolver == nil {
-		return "", fmt.Errorf("agora connect resolver is not configured")
+func (m *BackendManager) resolveAgoraDialClient(cfg BackendConfig) (*http.Client, error) {
+	if m.agoraDial == nil {
+		return nil, fmt.Errorf("agora dial client is not configured")
 	}
-	loopbackAddr, ok := m.connectResolver(backendID)
-	if !ok || strings.TrimSpace(loopbackAddr) == "" {
-		return "", fmt.Errorf("agora connect address for backend '%s' was not initialized", backendID)
+	tunnel := strings.TrimSpace(cfg.Transport.AgoraTunnel)
+	if tunnel == "" {
+		return nil, fmt.Errorf("agora tunnel for backend '%s' is required", cfg.ID)
 	}
-	return strings.TrimSpace(loopbackAddr), nil
+	httpClient, err := m.agoraDial(tunnel)
+	if err != nil {
+		return nil, fmt.Errorf("agora dial client for backend '%s': %w", cfg.ID, err)
+	}
+	return httpClient, nil
 }
 
 // connectHTTPBackend establishes a connection to a remote HTTP(S) backend.

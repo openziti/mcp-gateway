@@ -61,10 +61,10 @@
 #  env_root: ""  # optional: Agora environment root
 #  instance_name: "mcp-gateway"
 #  description: "MCP gateway"
-#  tunnel_mode: "tcp"  # tcp, http, or udp
 #  serve:
 #    enabled: false
-#    grants: []
+#    tunnel: "mcp-gateway"  # bind if it exists (persistent), else create+delete (ephemeral); default: instance_name
+#    grants: []  # applied only on the create path
 #  advertisement:
 #    publish: true  # default true when agora.enabled is true
 #    workgroup_ids:

@@ -10,7 +10,6 @@ type Config struct {
 
 	InstanceName string
 	Description  string
-	TunnelMode   string // tcp, http, or udp unless constrained by Defaults
 
 	Advertisement *AdvertisementConfig
 	Serve         *ServeConfig
@@ -27,7 +26,12 @@ type AdvertisementConfig struct {
 // ServeConfig controls Agora Layer 1 serve behavior.
 type ServeConfig struct {
 	Enabled bool
-	Grants  []string
+	// Tunnel is the create-or-bind tunnel name. If a tunnel with this name
+	// already exists on the controller, the process binds to it (persistent
+	// named share) and leaves it intact; otherwise it creates the tunnel at
+	// startup and deletes it on shutdown (ephemeral). Defaults to InstanceName.
+	Tunnel string
+	Grants []string
 }
 
 // IntegrationFile is the demo-bootstrap handoff file shape.

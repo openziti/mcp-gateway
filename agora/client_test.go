@@ -22,9 +22,6 @@ func TestNewClientAppliesDialDefaults(t *testing.T) {
 	if client.opts.Defaults.Description != "MCP tools client" {
 		t.Fatalf("Description = %q", client.opts.Defaults.Description)
 	}
-	if client.opts.Defaults.TunnelMode != "tcp" {
-		t.Fatalf("TunnelMode = %q", client.opts.Defaults.TunnelMode)
-	}
 	if client.opts.Defaults.AgentNamePrefix != "mcp-tools" {
 		t.Fatalf("AgentNamePrefix = %q", client.opts.Defaults.AgentNamePrefix)
 	}

@@ -21,18 +21,18 @@ import (
 
 // Backend manages the lifecycle of a zrok share serving MCP with per-client sessions.
 type Backend struct {
-	config          *Config
-	namespace       *aggregator.Namespace
-	sessionFactory  *SessionFactory
-	share           *Share
-	httpServer      *http.Server
-	agoraServer     *http.Server
-	agoraListener   net.Listener
-	agoraSubsystem  *mcpagora.Subsystem
-	connectResolver aggregator.ConnectResolver
-	ipcClient       *ipc.Client
-	ipcCancel       context.CancelFunc
-	mainCtx         context.Context // stored for reconnection callback
+	config         *Config
+	namespace      *aggregator.Namespace
+	sessionFactory *SessionFactory
+	share          *Share
+	httpServer     *http.Server
+	agoraServer    *http.Server
+	agoraServe     *mcpagora.Serve
+	agoraSubsystem *mcpagora.Subsystem
+	agoraDial      aggregator.AgoraDialClient
+	ipcClient      *ipc.Client
+	ipcCancel      context.CancelFunc
+	mainCtx        context.Context // stored for reconnection callback
 }
 
 // New creates a Backend from config.
@@ -66,29 +66,32 @@ func (b *Backend) Start(ctx context.Context) (err error) {
 		subsys, err := mcpagora.NewSubsystem(mcpagora.SubsystemOptions{
 			Config: b.config.Agora,
 			Defaults: mcpagora.Defaults{
-				InstanceName:       "mcp-gateway",
-				Description:        "MCP tool gateway",
-				TunnelMode:         "tcp",
-				AgentNamePrefix:    "mcp-gateway",
-				AllowedTunnelModes: []string{"tcp", "http"},
+				InstanceName:    "mcp-gateway",
+				Description:     "MCP tool gateway",
+				AgentNamePrefix: "mcp-gateway",
 			},
-			Capabilities:   mcpagora.Derive([]string{"mcp-tools"}, gatewayCapabilityExtras(b.config)),
-			ConnectTargets: collectAgoraConnectTargets(b.config.Backends),
-			ServeWanted:    b.config.AgoraServeEnabled(),
-			PublishWanted:  b.config.AgoraPublishEnabled(),
+			Capabilities:  mcpagora.Derive([]string{"mcp-tools"}, gatewayCapabilityExtras(b.config)),
+			ServeWanted:   b.config.AgoraServeEnabled(),
+			PublishWanted: b.config.AgoraPublishEnabled(),
 		})
 		if err != nil {
 			return err
 		}
 		b.agoraSubsystem = subsys
-		if err := b.agoraSubsystem.BootstrapConnects(ctx); err != nil {
-			return err
+
+		// reserve each unique agora-backend tunnel once, front-loading the
+		// controller-side dialer attachment out of the connection hot path.
+		dialer := b.agoraSubsystem.Dialer()
+		for _, tunnel := range collectAgoraTunnels(b.config.Backends) {
+			if err := dialer.Attach(ctx, tunnel); err != nil {
+				return err
+			}
 		}
-		b.connectResolver = b.agoraSubsystem.ConnectAddress
+		b.agoraDial = dialer.HTTPClient
 	}
 
 	// discover tools from backends (temporary connections)
-	namespace, err := b.discoverTools(ctx, b.connectResolver)
+	namespace, err := b.discoverTools(ctx, b.agoraDial)
 	if err != nil {
 		return fmt.Errorf("failed to discover tools: %w", err)
 	}
@@ -97,7 +100,7 @@ func (b *Backend) Start(ctx context.Context) (err error) {
 	dl.Log().With("tool_count", namespace.Count()).Info("discovered tools from backends")
 
 	// create session factory with namespace
-	b.sessionFactory = NewSessionFactory(b.config, namespace, b.connectResolver)
+	b.sessionFactory = NewSessionFactory(b.config, namespace, b.agoraDial)
 
 	// create or connect to zrok share
 	if b.config.ZrokShareEnabled() {
@@ -124,11 +127,13 @@ func (b *Backend) Start(ctx context.Context) (err error) {
 	}
 
 	if b.config.AgoraServeEnabled() {
-		listener, err := net.Listen("tcp", "127.0.0.1:0")
+		// create-or-bind the serve tunnel and bind the MCP handler directly to
+		// the Agora net.Listener — no loopback hop.
+		serve, err := b.agoraSubsystem.Serve(ctx)
 		if err != nil {
-			return fmt.Errorf("failed to create agora listener: %w", err)
+			return fmt.Errorf("failed to serve agora tunnel: %w", err)
 		}
-		b.agoraListener = listener
+		b.agoraServe = serve
 		b.agoraServer = &http.Server{Handler: handler}
 	}
 
@@ -203,7 +208,7 @@ func (b *Backend) startHeartbeatAndShutdownListener() {
 
 // discoverTools connects to all backends temporarily to discover available tools.
 // the connections are closed after discovery; per-client sessions will reconnect.
-func (b *Backend) discoverTools(ctx context.Context, resolver aggregator.ConnectResolver) (*aggregator.Namespace, error) {
+func (b *Backend) discoverTools(ctx context.Context, agoraDial aggregator.AgoraDialClient) (*aggregator.Namespace, error) {
 	// create aggregator config from our embedded config
 	aggCfg := &aggregator.Config{
 		Aggregator: b.config.Aggregator,
@@ -212,7 +217,7 @@ func (b *Backend) discoverTools(ctx context.Context, resolver aggregator.Connect
 
 	// create backend manager for discovery
 	backends := aggregator.NewBackendManager(aggCfg)
-	backends.SetConnectResolver(resolver)
+	backends.SetAgoraDialClient(agoraDial)
 
 	// connect to all backends
 	if err := backends.Connect(ctx); err != nil {
@@ -282,29 +287,20 @@ func (b *Backend) Run(ctx context.Context) error {
 		dl.Log().Info("serving mcp over zrok share")
 	}
 
-	if b.agoraServer != nil && b.agoraListener != nil {
+	if b.agoraServer != nil && b.agoraServe != nil {
 		servers = append(servers, b.agoraServer)
-		serveHTTP(b.agoraServer, b.agoraListener, errCh, "agora")
-		dl.Log().With("listen", b.agoraListener.Addr().String()).Info("serving mcp for agora tunnel")
+		serveHTTP(b.agoraServer, b.agoraServe.Listener(), errCh, "agora")
+		dl.Log().With("tunnel", b.agoraSubsystem.ServeTunnelName()).Info("serving mcp for agora tunnel")
 	}
 
 	if len(servers) == 0 {
 		return fmt.Errorf("no gateway listeners are configured")
 	}
 
-	if b.agoraSubsystem != nil {
-		if b.config.AgoraServeEnabled() {
-			target := b.agoraServeBackendTarget()
-			if err := b.agoraSubsystem.StartServing(ctx, target); err != nil {
-				shutdownHTTPServers(servers)
-				return err
-			}
-		}
-		if b.config.AgoraPublishEnabled() {
-			if err := b.agoraSubsystem.StartPublishing(ctx); err != nil {
-				shutdownHTTPServers(servers)
-				return err
-			}
+	if b.agoraSubsystem != nil && b.config.AgoraPublishEnabled() {
+		if err := b.agoraSubsystem.StartPublishing(ctx); err != nil {
+			shutdownHTTPServers(servers)
+			return err
 		}
 	}
 
@@ -349,13 +345,8 @@ func (b *Backend) Stop() error {
 		}
 	}
 
-	if b.agoraListener != nil {
-		if err := b.agoraListener.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
-			dl.Log().With("error", err).Warn("error closing agora listener")
-			lastErr = err
-		}
-	}
-
+	// Close tears down the serve listener (deleting the tunnel only if we
+	// created it), detaches every dial tunnel, and closes the agent.
 	if b.agoraSubsystem != nil {
 		if err := b.agoraSubsystem.Close(); err != nil {
 			dl.Log().With("error", err).Warn("error closing agora subsystem")
@@ -410,22 +401,6 @@ func shutdownHTTPServers(servers []*http.Server) error {
 	return errors.Join(errs...)
 }
 
-func (b *Backend) agoraServeBackendTarget() string {
-	if b.agoraListener == nil {
-		return ""
-	}
-
-	address := b.agoraListener.Addr().String()
-	mode := "tcp"
-	if b.config != nil && b.config.Agora != nil && strings.TrimSpace(b.config.Agora.TunnelMode) != "" {
-		mode = strings.ToLower(strings.TrimSpace(b.config.Agora.TunnelMode))
-	}
-	if mode == "http" {
-		return "http://" + address
-	}
-	return address
-}
-
 func gatewayCapabilityExtras(cfg *Config) []string {
 	if cfg == nil {
 		return nil
@@ -444,18 +419,27 @@ func gatewayCapabilityExtras(cfg *Config) []string {
 	return extras
 }
 
-func collectAgoraConnectTargets(backends []aggregator.BackendConfig) []mcpagora.ConnectTarget {
-	targets := make([]mcpagora.ConnectTarget, 0)
+// collectAgoraTunnels returns the unique agora_tunnel names across agora
+// backends, preserving first-seen order. Each is attached once at startup;
+// several backends naming the same tunnel share one attachment.
+func collectAgoraTunnels(backends []aggregator.BackendConfig) []string {
+	seen := make(map[string]struct{})
+	tunnels := make([]string, 0)
 	for _, backend := range backends {
 		if backend.Transport.Type != "agora" {
 			continue
 		}
-		targets = append(targets, mcpagora.ConnectTarget{
-			Key:    strings.TrimSpace(backend.ID),
-			Tunnel: strings.TrimSpace(backend.Transport.AgoraTunnel),
-		})
+		tunnel := strings.TrimSpace(backend.Transport.AgoraTunnel)
+		if tunnel == "" {
+			continue
+		}
+		if _, ok := seen[tunnel]; ok {
+			continue
+		}
+		seen[tunnel] = struct{}{}
+		tunnels = append(tunnels, tunnel)
 	}
-	return targets
+	return tunnels
 }
 
 // ShareToken returns the share token after Start().
