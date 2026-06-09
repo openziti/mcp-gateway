@@ -88,10 +88,13 @@ attachment) and `tunnel.Dial(name)` per connection inside `DialContext`. The
 "multiplexing one connect across backends" deferral dissolves: there is nothing
 left to multiplex.
 
-**5. The advertisement/catalog layer is untouched.** `catalog.EnsurePublished`,
-`PublishSpec`, capability derivation, the integration-file merge for workgroup and
-contract IDs, retract-on-shutdown — all unchanged. This migration is a transport
-swap beneath a stable advertisement model.
+**5. The advertisement/catalog model is stable — two narrow value changes aside.**
+`catalog.EnsurePublished`, `PublishSpec`, capability derivation, the integration-file
+merge for workgroup and contract IDs, and retract-on-shutdown are all unchanged. The
+only changes are to values it carries: `TunnelMode` becomes the constant label of
+decision #3, and the published `Name` follows the resolved serve-tunnel name — it is
+the client's dial key, so it must equal the tunnel actually served. This migration is
+a transport swap beneath a stable advertisement model.
 
 **6. Thin primitives mean fabric-level lifecycle.** Deleting a tunnel or detaching
 revokes at the controller; OpenZiti terminates live sessions; the application
