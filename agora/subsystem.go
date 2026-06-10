@@ -150,6 +150,16 @@ func newSubsystemWithOps(opts SubsystemOptions, ops agoraOps) (*Subsystem, error
 	serveWanted := opts.ServeWanted && ServeEnabled(cfg)
 	publishWanted := opts.PublishWanted && AdvertisementPublish(cfg)
 
+	// publishing requires workgroup scope IDs (controller-enforced). When
+	// publishing is on by *default* and no workgroup IDs are configured,
+	// downgrade to serve-only with a notice — an enrolled account without an
+	// integration file can still serve. An *explicit* advertisement.publish:
+	// true with missing workgroup IDs remains a hard error in validateConfig.
+	if publishWanted && !publishExplicit(cfg) && !hasWorkgroupIDs(cfg) {
+		publishWanted = false
+		dl.Log().Info("skipping agora advertisement publish: no workgroup ids configured (set agora.advertisement.workgroup_ids or an integration file to publish)")
+	}
+
 	capabilities := advertisementCapabilities(cfg, opts.Capabilities)
 	if err := validateConfig(cfg, publishWanted, capabilities); err != nil {
 		return nil, err
@@ -193,10 +203,6 @@ func advertisementCapabilities(cfg *Config, derived []string) []string {
 }
 
 func validateConfig(cfg *Config, publishWanted bool, capabilities []string) error {
-	if strings.TrimSpace(cfg.APIEndpoint) == "" {
-		return fmt.Errorf("agora.api_endpoint is required when agora is enabled")
-	}
-
 	if publishWanted {
 		if cfg.Advertisement == nil || len(cfg.Advertisement.WorkgroupIDs) == 0 {
 			return fmt.Errorf("agora.advertisement.workgroup_ids requires at least one ID when publishing is enabled")
@@ -222,10 +228,16 @@ func validateConfig(cfg *Config, publishWanted bool, capabilities []string) erro
 	return nil
 }
 
+// validateAgentEndpoint cross-checks the optional agora.api_endpoint config
+// value against the enrolled environment. The enrolled environment is the
+// source of truth; when the config value is unset, no cross-check applies.
 func validateAgentEndpoint(cfg *Config, ops agoraOps, handle any) error {
 	rootEndpoint, source := ops.RootAPIEndpoint(handle)
 	if strings.TrimSpace(rootEndpoint) == "" {
 		return fmt.Errorf("agora environment api endpoint is not configured")
+	}
+	if strings.TrimSpace(cfg.APIEndpoint) == "" {
+		return nil
 	}
 	if !sameEndpoint(rootEndpoint, cfg.APIEndpoint) {
 		return fmt.Errorf("agora.api_endpoint '%s' does not match enrolled environment endpoint '%s' from %s", cfg.APIEndpoint, rootEndpoint, source)

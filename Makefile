@@ -1,8 +1,10 @@
 .PHONY: clean build test
 
+GOBIN ?= $(shell go env GOPATH)/bin
+
 clean:
 	go clean ./...
-	rm -f $(GOPATH)/bin/mcp-*
+	rm -f $(GOBIN)/*
 
 build:
 	go install ./...

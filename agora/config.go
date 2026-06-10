@@ -62,3 +62,13 @@ func AdvertisementPublish(cfg *Config) bool {
 	}
 	return true
 }
+
+// publishExplicit reports whether advertisement.publish was set explicitly,
+// as opposed to publishing being on by default.
+func publishExplicit(cfg *Config) bool {
+	return cfg != nil && cfg.Advertisement != nil && cfg.Advertisement.Publish != nil
+}
+
+func hasWorkgroupIDs(cfg *Config) bool {
+	return cfg != nil && cfg.Advertisement != nil && len(cfg.Advertisement.WorkgroupIDs) > 0
+}

@@ -21,12 +21,14 @@ Agora mode requires:
 
 - An enrolled Agora environment on the host running the binary.
 - A reachable Agora controller.
-- An `agora.api_endpoint` value matching the enrolled environment.
 - A Ziti fabric reachable by the Agora runtime.
 
-The `api_endpoint` value is validate-only. The code compares it with the
-endpoint in the enrolled Agora environment and exits if they differ; it does
-not rewrite Agora environment files.
+The enrolled environment is the source of truth for the controller endpoint.
+`agora.api_endpoint` is an optional validate-only cross-check: when set, the
+code compares it with the endpoint in the enrolled Agora environment and exits
+if they differ; it does not rewrite Agora environment files. When unset, the
+enrolled environment endpoint is used as-is — so an enrolled host can run
+`--network=agora` with no Agora config at all.
 
 For demo-bootstrap or other provisioning flows, prefer an integration file.
 The integration file carries provisioned environment and catalog IDs while the
@@ -95,6 +97,16 @@ mcp-bridge \
   mcp-filesystem /tmp
 ```
 
+`--agora-tunnel <name>` names the serve tunnel (and therefore the published
+advertisement, which always carries the dial key). Without it, the tunnel is
+named after the instance (`mcp-bridge`). The flag uses the same create-or-bind
+semantics as `serve.tunnel`: bind to a pre-provisioned tunnel and leave it
+intact, or create an ephemeral one and delete it on shutdown.
+
+```bash
+mcp-bridge --network=agora --agora-tunnel lore -- lore serve --repo ~/grimoire --read-only
+```
+
 Bridge advertisements derive capabilities from `mcp-tools`, the bridged
 command tag, and `agora-serve`. Use `--env`, `--working-dir`, and command args
 the same way as zrok bridge mode.
@@ -140,8 +152,9 @@ CLI flag is not provided.
 | Command or flag | Effect |
 |---|---|
 | `mcp-bridge <command> [args...]` | Existing zrok bridge behavior |
-| `--network=agora` | Enables Agora serve and publish, disables zrok share |
+| `--network=agora` | Enables Agora serve, disables zrok share; publishing follows its default (publish when workgroup IDs are available) |
 | `--network=zrok` | Existing zrok behavior |
+| `--agora-tunnel <name>` | Serve-tunnel name: bind if it exists (persistent), else create+delete (ephemeral); defaults to the instance name (`mcp-bridge`) |
 | `--agora-integration-file <path>` | Sets the Agora integration file |
 | `--env KEY=VALUE` | Passes environment values to the stdio MCP server |
 | `--working-dir <dir>` | Sets the stdio MCP server working directory |
@@ -203,6 +216,16 @@ does not require advertisement IDs.
 When `agora.enabled: true`, advertisement publishing defaults to enabled.
 Set `advertisement.publish: false` to use Agora serving or backend connects
 without publishing a catalog card.
+
+Publishing requires workgroup scope IDs (controller-enforced). The
+`advertisement.publish` setting is a tri-state:
+
+- **Unset (default-on):** publishes when workgroup IDs are available; when none
+  are configured, the process logs a notice and runs serve-only instead of
+  failing. This lets an enrolled account run `--network=agora` with no
+  integration file.
+- **Explicit `true`:** missing workgroup IDs are a hard error.
+- **Explicit `false`:** never publishes.
 
 When publishing is enabled:
 

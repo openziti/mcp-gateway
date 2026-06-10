@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 
 	"github.com/michaelquigley/df/dl"
@@ -20,6 +21,7 @@ var (
 	workingDir           string
 	shareToken           string
 	network              string
+	agoraTunnel          string
 	agoraIntegrationFile string
 )
 
@@ -38,6 +40,7 @@ func init() {
 	rootCmd.Flags().StringVar(&workingDir, "working-dir", "", "working directory for the command")
 	rootCmd.Flags().StringVar(&shareToken, "share-token", "", "pre-created zrok share token (managed mode)")
 	rootCmd.Flags().StringVar(&network, "network", "", "network shortcut: zrok or agora")
+	rootCmd.Flags().StringVar(&agoraTunnel, "agora-tunnel", "", "agora tunnel name to serve (bind if it exists, else create+delete; default: instance name)")
 	rootCmd.Flags().StringVar(&agoraIntegrationFile, "agora-integration-file", "", "path to Agora integration file (overrides config)")
 }
 
@@ -122,11 +125,9 @@ func applyOverrides(cfg *bridge.Config) error {
 			cfg.Agora.Serve = &mcpagora.ServeConfig{}
 		}
 		cfg.Agora.Serve.Enabled = true
-		if cfg.Agora.Advertisement == nil {
-			cfg.Agora.Advertisement = &mcpagora.AdvertisementConfig{}
-		}
-		publish := true
-		cfg.Agora.Advertisement.Publish = &publish
+		// publishing is left at its default (publish when workgroup IDs are
+		// available) rather than forced on, so an enrolled account without an
+		// integration file can serve without publishing.
 		if cfg.Zrok == nil {
 			cfg.Zrok = &bridge.ZrokConfig{}
 		}
@@ -134,6 +135,16 @@ func applyOverrides(cfg *bridge.Config) error {
 			cfg.Zrok.Share = &bridge.ZrokShareConfig{}
 		}
 		cfg.Zrok.Share.Enabled = false
+	}
+
+	if tunnel := strings.TrimSpace(agoraTunnel); tunnel != "" {
+		if cfg.Agora == nil {
+			cfg.Agora = &mcpagora.Config{}
+		}
+		if cfg.Agora.Serve == nil {
+			cfg.Agora.Serve = &mcpagora.ServeConfig{}
+		}
+		cfg.Agora.Serve.Tunnel = tunnel
 	}
 
 	integrationFile := agoraIntegrationFile

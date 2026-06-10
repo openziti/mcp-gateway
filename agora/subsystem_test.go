@@ -228,6 +228,73 @@ func TestSubsystemPublishNameFollowsServeTunnel(t *testing.T) {
 	}
 }
 
+func TestSubsystemDefaultPublishWithoutWorkgroupsDowngradesToServeOnly(t *testing.T) {
+	// publish-by-default (Publish nil) with no workgroup IDs must not error;
+	// the subsystem comes up serve-only and StartPublishing is a no-op.
+	cfg := baseTestConfig()
+	cfg.Advertisement = nil
+	cfg.Serve = &ServeConfig{Enabled: true}
+
+	ops := newFakeOps()
+	sub, err := newSubsystemWithOps(SubsystemOptions{
+		Config:        cfg,
+		Defaults:      gatewayDefaults(),
+		Capabilities:  []string{"mcp-tools"},
+		ServeWanted:   true,
+		PublishWanted: true,
+	}, ops)
+	if err != nil {
+		t.Fatalf("newSubsystemWithOps returned error: %v", err)
+	}
+	if sub == nil {
+		t.Fatal("expected subsystem")
+	}
+	if err := sub.StartPublishing(context.Background()); err != nil {
+		t.Fatalf("StartPublishing returned error: %v", err)
+	}
+	if len(ops.publishSpecs) != 0 {
+		t.Fatalf("publish must be skipped without workgroup ids: %#v", ops.publishSpecs)
+	}
+}
+
+func TestSubsystemExplicitPublishWithoutWorkgroupsFails(t *testing.T) {
+	publish := true
+	cfg := baseTestConfig()
+	cfg.Advertisement = &AdvertisementConfig{Publish: &publish}
+
+	ops := newFakeOps()
+	_, err := newSubsystemWithOps(SubsystemOptions{
+		Config:        cfg,
+		Defaults:      gatewayDefaults(),
+		Capabilities:  []string{"mcp-tools"},
+		PublishWanted: true,
+	}, ops)
+	if err == nil || !strings.Contains(err.Error(), "workgroup_ids") {
+		t.Fatalf("explicit publish without workgroup ids must fail, got %v", err)
+	}
+}
+
+func TestSubsystemAllowsUnsetAPIEndpoint(t *testing.T) {
+	// the enrolled environment is the endpoint's source of truth; an unset
+	// agora.api_endpoint skips the cross-check (zero-config `--network agora`).
+	cfg := baseTestConfig()
+	cfg.APIEndpoint = ""
+
+	ops := newFakeOps()
+	sub, err := newSubsystemWithOps(SubsystemOptions{
+		Config:        cfg,
+		Defaults:      gatewayDefaults(),
+		Capabilities:  []string{"mcp-tools"},
+		PublishWanted: true,
+	}, ops)
+	if err != nil {
+		t.Fatalf("newSubsystemWithOps returned error: %v", err)
+	}
+	if sub == nil {
+		t.Fatal("expected subsystem")
+	}
+}
+
 func TestSubsystemEndpointMismatchFails(t *testing.T) {
 	ops := newFakeOps()
 	ops.rootEndpoint = "http://other.example"
