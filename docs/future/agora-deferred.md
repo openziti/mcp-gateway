@@ -1,6 +1,6 @@
 # Agora Integration — Deferred Work
 
-The Agora integration shipped across `mcp-gateway`, `mcp-bridge`, and `mcp-tools` (serve, publish, and per-backend connect over Layer 1 tunnels). It was then migrated off the v0.1.0 managed-proxy tunnel API and its loopback workaround onto the SDK's thin `Listen`/`Dial` primitives, embedding Agora the way zrok is embedded (see [agora-l1-primitives-migration.md](agora-l1-primitives-migration.md)). This note records what remains deliberately out of scope. The realized behavior lives in [../current/agora.md](../current/agora.md).
+The Agora integration shipped across `mcp-gateway`, `mcp-bridge`, and `mcp-tools` (serve, publish, and per-backend connect over Layer 1 tunnels). It was then migrated off the v0.1.0 managed-proxy tunnel API and its loopback workaround onto the SDK's thin `Listen`/`Dial` primitives, embedding Agora the way zrok is embedded. This note records what remains deliberately out of scope. The realized behavior lives in [../current/agora.md](../current/agora.md).
 
 ## Resolved by the Listen/Dial migration
 
