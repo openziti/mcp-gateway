@@ -65,7 +65,6 @@ func expandStrings(cfg *Config) {
 	cfg.EnvRoot = os.ExpandEnv(cfg.EnvRoot)
 	cfg.InstanceName = os.ExpandEnv(cfg.InstanceName)
 	cfg.Description = os.ExpandEnv(cfg.Description)
-	cfg.TunnelMode = os.ExpandEnv(cfg.TunnelMode)
 
 	if cfg.Advertisement != nil {
 		cfg.Advertisement.ContractID = os.ExpandEnv(cfg.Advertisement.ContractID)
@@ -77,6 +76,7 @@ func expandStrings(cfg *Config) {
 		}
 	}
 	if cfg.Serve != nil {
+		cfg.Serve.Tunnel = os.ExpandEnv(cfg.Serve.Tunnel)
 		for i := range cfg.Serve.Grants {
 			cfg.Serve.Grants[i] = os.ExpandEnv(cfg.Serve.Grants[i])
 		}

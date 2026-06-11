@@ -17,59 +17,60 @@ import (
 const cleanupTimeout = 5 * time.Second
 
 var (
-	workgroupIDPattern     = regexp.MustCompile(`^wg_[a-z0-9]{12}$`)
-	contractIDPattern      = regexp.MustCompile(`^con_[a-z0-9]{12}$`)
-	allocateConnectAddress = allocateLoopbackPort
+	workgroupIDPattern = regexp.MustCompile(`^wg_[a-z0-9]{12}$`)
+	contractIDPattern  = regexp.MustCompile(`^con_[a-z0-9]{12}$`)
 )
-
-// ConnectTarget describes one Agora Layer 1 tunnel to connect locally.
-type ConnectTarget struct {
-	Key    string
-	Tunnel string
-}
 
 // SubsystemOptions configures the shared Agora subsystem.
 type SubsystemOptions struct {
-	Config         *Config
-	Defaults       Defaults
-	Capabilities   []string
-	ConnectTargets []ConnectTarget
-	ServeWanted    bool
-	PublishWanted  bool
+	Config        *Config
+	Defaults      Defaults
+	Capabilities  []string
+	ServeWanted   bool
+	PublishWanted bool
 }
 
-// Subsystem manages Agora agent, tunnel, and catalog lifecycle.
+// Subsystem manages the single runtime-less Agora agent and its serve, dial,
+// and catalog lifecycle. One *agent.Agent backs the serve listener, every
+// backend attach/dial, and catalog publish/retract.
 type Subsystem struct {
 	cfg           *Config
 	identity      Identity
 	capabilities  []string
-	targets       []ConnectTarget
 	serveWanted   bool
 	publishWanted bool
-	wantRuntime   bool
 	ops           agoraOps
 	agent         any
 
-	runtimeStarted bool
-	advertisement  *catalog.Advertisement
-	serveStatus    *tunnel.ServeStatus
-	connects       map[string]*tunnel.ConnectStatus
-	closed         bool
+	advertisement *catalog.Advertisement
+	serve         *Serve
+	dialer        *Dialer
+	closed        bool
 
 	log *dl.Builder
 }
 
+// agoraOps is the SDK seam that keeps the subsystem unit-testable without a
+// live controller. It wraps the thin Listen/Dial primitives plus catalog.
 type agoraOps interface {
 	NewStandalone(agent.StandaloneOptions) (any, error)
 	RootAPIEndpoint(any) (endpoint, source string)
-	EnvironmentAPIEndpoint(any) (endpoint string, ok bool)
-	StartRuntime(context.Context, any) error
-	EnsureConnected(context.Context, any, tunnel.ConnectSpec) (*tunnel.ConnectStatus, error)
-	RemoveConnect(context.Context, any, string, string) error
-	EnsureServed(context.Context, any, tunnel.ServeSpec) (*tunnel.ServeStatus, error)
-	RemoveServe(context.Context, any, string) error
+
+	// serve side
+	Create(context.Context, any, tunnel.Spec) (*tunnel.Tunnel, error)
+	GetTunnel(context.Context, any, string) (*tunnel.Tunnel, error)
+	Listen(context.Context, any, string) (net.Listener, error)
+	Delete(context.Context, any, *tunnel.Tunnel) error
+
+	// dial side
+	Attach(context.Context, any, string) (*tunnel.Attachment, error)
+	Dial(context.Context, any, string) (net.Conn, error)
+	Detach(context.Context, any, string) error
+
+	// catalog
 	EnsurePublished(context.Context, any, catalog.PublishSpec) (*catalog.Advertisement, error)
 	Retract(context.Context, any, string) error
+
 	Close(context.Context, any) error
 }
 
@@ -87,32 +88,32 @@ func (defaultOps) RootAPIEndpoint(handle any) (string, string) {
 	return a.EnvRoot().APIEndpoint()
 }
 
-func (defaultOps) EnvironmentAPIEndpoint(handle any) (string, bool) {
-	a := handle.(*agent.Agent)
-	if a.Environment() == nil {
-		return "", false
-	}
-	return a.Environment().APIEndpoint, true
+func (defaultOps) Create(ctx context.Context, handle any, spec tunnel.Spec) (*tunnel.Tunnel, error) {
+	return tunnel.Create(ctx, handle.(*agent.Agent), spec)
 }
 
-func (defaultOps) StartRuntime(ctx context.Context, handle any) error {
-	return handle.(*agent.Agent).StartRuntime(ctx)
+func (defaultOps) GetTunnel(ctx context.Context, handle any, nameOrID string) (*tunnel.Tunnel, error) {
+	return tunnel.Get(ctx, handle.(*agent.Agent), nameOrID)
 }
 
-func (defaultOps) EnsureConnected(ctx context.Context, handle any, spec tunnel.ConnectSpec) (*tunnel.ConnectStatus, error) {
-	return tunnel.EnsureConnected(ctx, handle.(*agent.Agent), spec)
+func (defaultOps) Listen(ctx context.Context, handle any, nameOrID string) (net.Listener, error) {
+	return tunnel.Listen(ctx, handle.(*agent.Agent), nameOrID)
 }
 
-func (defaultOps) RemoveConnect(ctx context.Context, handle any, name, listenAddress string) error {
-	return tunnel.RemoveConnect(ctx, handle.(*agent.Agent), name, listenAddress)
+func (defaultOps) Delete(ctx context.Context, handle any, t *tunnel.Tunnel) error {
+	return tunnel.Delete(ctx, handle.(*agent.Agent), t)
 }
 
-func (defaultOps) EnsureServed(ctx context.Context, handle any, spec tunnel.ServeSpec) (*tunnel.ServeStatus, error) {
-	return tunnel.EnsureServed(ctx, handle.(*agent.Agent), spec)
+func (defaultOps) Attach(ctx context.Context, handle any, nameOrID string) (*tunnel.Attachment, error) {
+	return tunnel.Attach(ctx, handle.(*agent.Agent), nameOrID)
 }
 
-func (defaultOps) RemoveServe(ctx context.Context, handle any, name string) error {
-	return tunnel.RemoveServe(ctx, handle.(*agent.Agent), name)
+func (defaultOps) Dial(ctx context.Context, handle any, nameOrID string) (net.Conn, error) {
+	return tunnel.Dial(ctx, handle.(*agent.Agent), nameOrID)
+}
+
+func (defaultOps) Detach(ctx context.Context, handle any, nameOrID string) error {
+	return tunnel.Detach(ctx, handle.(*agent.Agent), nameOrID)
 }
 
 func (defaultOps) EnsurePublished(ctx context.Context, handle any, spec catalog.PublishSpec) (*catalog.Advertisement, error) {
@@ -148,42 +149,50 @@ func newSubsystemWithOps(opts SubsystemOptions, ops agoraOps) (*Subsystem, error
 
 	serveWanted := opts.ServeWanted && ServeEnabled(cfg)
 	publishWanted := opts.PublishWanted && AdvertisementPublish(cfg)
-	targets := normalizeConnectTargets(opts.ConnectTargets)
-	wantRuntime := serveWanted || len(targets) > 0
+
+	// publishing requires workgroup scope IDs (controller-enforced). When
+	// publishing is on by *default* and no workgroup IDs are configured,
+	// downgrade to serve-only with a notice — an enrolled account without an
+	// integration file can still serve. An *explicit* advertisement.publish:
+	// true with missing workgroup IDs remains a hard error in validateConfig.
+	if publishWanted && !publishExplicit(cfg) && !hasWorkgroupIDs(cfg) {
+		publishWanted = false
+		dl.Log().Info("skipping agora advertisement publish: no workgroup ids configured (set agora.advertisement.workgroup_ids or an integration file to publish)")
+	}
 
 	capabilities := advertisementCapabilities(cfg, opts.Capabilities)
-	if err := validateConfig(cfg, identity, targets, publishWanted, capabilities); err != nil {
+	if err := validateConfig(cfg, publishWanted, capabilities); err != nil {
 		return nil, err
 	}
 
+	// Listen/Dial are thin primitives with no embedded runtime.
 	handle, err := ops.NewStandalone(agent.StandaloneOptions{
 		Name:        identity.AgentName,
 		Description: identity.Description,
 		EnvRoot:     cfg.EnvRoot,
-		WithRuntime: wantRuntime,
+		WithRuntime: false,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("initialize agora agent: %w", err)
 	}
 
-	if err := validateAgentEndpoint(cfg, wantRuntime, ops, handle); err != nil {
+	if err := validateAgentEndpoint(cfg, ops, handle); err != nil {
 		_ = ops.Close(context.Background(), handle)
 		return nil, err
 	}
 
-	return &Subsystem{
+	s := &Subsystem{
 		cfg:           cfg,
 		identity:      identity,
 		capabilities:  append([]string(nil), capabilities...),
-		targets:       targets,
 		serveWanted:   serveWanted,
 		publishWanted: publishWanted,
-		wantRuntime:   wantRuntime,
 		ops:           ops,
 		agent:         handle,
-		connects:      map[string]*tunnel.ConnectStatus{},
 		log:           dl.Log().With("agent", identity.AgentName).With("instance", identity.InstanceName),
-	}, nil
+	}
+	s.dialer = newDialer(s)
+	return s, nil
 }
 
 func advertisementCapabilities(cfg *Config, derived []string) []string {
@@ -193,22 +202,7 @@ func advertisementCapabilities(cfg *Config, derived []string) []string {
 	return Derive(nil, derived)
 }
 
-func normalizeConnectTargets(targets []ConnectTarget) []ConnectTarget {
-	normalized := make([]ConnectTarget, 0, len(targets))
-	for _, target := range targets {
-		normalized = append(normalized, ConnectTarget{
-			Key:    strings.TrimSpace(target.Key),
-			Tunnel: strings.TrimSpace(target.Tunnel),
-		})
-	}
-	return normalized
-}
-
-func validateConfig(cfg *Config, identity Identity, targets []ConnectTarget, publishWanted bool, capabilities []string) error {
-	if strings.TrimSpace(cfg.APIEndpoint) == "" {
-		return fmt.Errorf("agora.api_endpoint is required when agora is enabled")
-	}
-
+func validateConfig(cfg *Config, publishWanted bool, capabilities []string) error {
 	if publishWanted {
 		if cfg.Advertisement == nil || len(cfg.Advertisement.WorkgroupIDs) == 0 {
 			return fmt.Errorf("agora.advertisement.workgroup_ids requires at least one ID when publishing is enabled")
@@ -231,47 +225,23 @@ func validateConfig(cfg *Config, identity Identity, targets []ConnectTarget, pub
 		}
 	}
 
-	if identity.TunnelMode == "" {
-		return fmt.Errorf("agora tunnel identity is unresolved")
-	}
-
-	seen := map[string]struct{}{}
-	for _, target := range targets {
-		key := strings.TrimSpace(target.Key)
-		if key == "" {
-			return fmt.Errorf("agora connect target key is required")
-		}
-		if _, ok := seen[key]; ok {
-			return fmt.Errorf("duplicate agora connect target key '%s'", key)
-		}
-		seen[key] = struct{}{}
-		if strings.TrimSpace(target.Tunnel) == "" {
-			return fmt.Errorf("agora connect target '%s' tunnel is required", key)
-		}
-	}
-
 	return nil
 }
 
-func validateAgentEndpoint(cfg *Config, wantRuntime bool, ops agoraOps, handle any) error {
+// validateAgentEndpoint cross-checks the optional agora.api_endpoint config
+// value against the enrolled environment. The enrolled environment is the
+// source of truth; when the config value is unset, no cross-check applies.
+func validateAgentEndpoint(cfg *Config, ops agoraOps, handle any) error {
 	rootEndpoint, source := ops.RootAPIEndpoint(handle)
 	if strings.TrimSpace(rootEndpoint) == "" {
 		return fmt.Errorf("agora environment api endpoint is not configured")
 	}
+	if strings.TrimSpace(cfg.APIEndpoint) == "" {
+		return nil
+	}
 	if !sameEndpoint(rootEndpoint, cfg.APIEndpoint) {
 		return fmt.Errorf("agora.api_endpoint '%s' does not match enrolled environment endpoint '%s' from %s", cfg.APIEndpoint, rootEndpoint, source)
 	}
-
-	if wantRuntime {
-		envEndpoint, ok := ops.EnvironmentAPIEndpoint(handle)
-		if !ok || strings.TrimSpace(envEndpoint) == "" {
-			return fmt.Errorf("agora runtime requires an enrolled environment api endpoint")
-		}
-		if !sameEndpoint(envEndpoint, cfg.APIEndpoint) {
-			return fmt.Errorf("agora.api_endpoint '%s' does not match enrolled runtime environment endpoint '%s'", cfg.APIEndpoint, envEndpoint)
-		}
-	}
-
 	return nil
 }
 
@@ -279,78 +249,29 @@ func sameEndpoint(a, b string) bool {
 	return strings.TrimRight(strings.TrimSpace(a), "/") == strings.TrimRight(strings.TrimSpace(b), "/")
 }
 
-// BootstrapConnects establishes loopback listeners for configured upstream tunnels.
-func (s *Subsystem) BootstrapConnects(ctx context.Context) error {
-	if s == nil || len(s.targets) == 0 {
-		return nil
+// ServeTunnelName returns the resolved create-or-bind serve tunnel name — the
+// client's dial key. It is the single source of truth shared by Serve and the
+// catalog advertisement Name, resolved whether or not serving is enabled here.
+func (s *Subsystem) ServeTunnelName() string {
+	if s == nil {
+		return ""
 	}
-	if err := s.startRuntime(ctx); err != nil {
-		return err
-	}
-
-	for _, target := range s.targets {
-		listenAddress, err := allocateConnectAddress()
-		if err != nil {
-			_ = s.Close()
-			return err
-		}
-		status, err := s.ops.EnsureConnected(ctx, s.agent, tunnel.ConnectSpec{
-			Name:          target.Tunnel,
-			ListenAddress: listenAddress,
-		})
-		if err != nil {
-			_ = s.Close()
-			return fmt.Errorf("ensure agora connect for '%s': %w", target.Key, err)
-		}
-		if status.ListenAddress == "" {
-			status.ListenAddress = listenAddress
-		}
-		s.connects[target.Key] = status
-		s.log.Infof("agora connect ready for '%s' service='%s' listen='%s'", target.Key, status.Name, status.ListenAddress)
-	}
-
-	return nil
+	return serveTunnelName(s.cfg, s.identity.InstanceName)
 }
 
-// StartServing ensures the Agora serve actor forwards to backendTarget.
-func (s *Subsystem) StartServing(ctx context.Context, backendTarget string) error {
-	if s == nil || !s.serveWanted {
-		return nil
-	}
-	backendTarget = strings.TrimSpace(backendTarget)
-	if backendTarget == "" {
-		return fmt.Errorf("agora serve backend target is required")
-	}
-	if err := s.startRuntime(ctx); err != nil {
-		return err
-	}
-	status, err := s.ops.EnsureServed(ctx, s.agent, tunnel.ServeSpec{
-		Name:          s.identity.InstanceName,
-		Mode:          tunnel.Mode(s.identity.TunnelMode),
-		BackendTarget: backendTarget,
-		GrantEmails:   append([]string(nil), s.cfg.Serve.Grants...),
-	})
-	if err != nil {
-		_ = s.Close()
-		return fmt.Errorf("ensure agora serve: %w", err)
-	}
-	s.serveStatus = status
-	s.log.Infof("agora serve ready name='%s' mode='%s' backend='%s'", status.Name, status.Mode, status.BackendTarget)
-
-	return nil
-}
-
-// StartPublishing ensures the Agora catalog advertisement exists.
+// StartPublishing ensures the Agora catalog advertisement exists. The
+// advertisement Name follows the resolved serve-tunnel name (the dial key) and
+// the mode is the constant HTTP label, since MCP always rides HTTP/SSE.
 func (s *Subsystem) StartPublishing(ctx context.Context) error {
 	if s == nil || !s.publishWanted {
 		return nil
 	}
 	advertisement, err := s.ops.EnsurePublished(ctx, s.agent, catalog.PublishSpec{
-		Name:              s.identity.InstanceName,
+		Name:              s.ServeTunnelName(),
 		Description:       s.identity.Description,
 		Capabilities:      s.catalogCapabilities(),
 		WorkgroupScopeIDs: append([]string(nil), s.cfg.Advertisement.WorkgroupIDs...),
-		TunnelMode:        catalog.TunnelMode(s.identity.TunnelMode),
+		TunnelMode:        catalog.TunnelHTTP,
 		ContractID:        s.cfg.Advertisement.ContractID,
 	})
 	if err != nil {
@@ -363,18 +284,6 @@ func (s *Subsystem) StartPublishing(ctx context.Context) error {
 	return nil
 }
 
-func (s *Subsystem) startRuntime(ctx context.Context) error {
-	if !s.wantRuntime || s.runtimeStarted {
-		return nil
-	}
-	if err := s.ops.StartRuntime(ctx, s.agent); err != nil {
-		return fmt.Errorf("start agora runtime: %w", err)
-	}
-	s.runtimeStarted = true
-	s.log.Info("agora runtime started")
-	return nil
-}
-
 func (s *Subsystem) catalogCapabilities() []catalog.Capability {
 	capabilities := make([]catalog.Capability, 0, len(s.capabilities))
 	for _, capability := range s.capabilities {
@@ -383,19 +292,17 @@ func (s *Subsystem) catalogCapabilities() []catalog.Capability {
 	return capabilities
 }
 
-// ConnectAddress returns the local loopback address for a connected target.
-func (s *Subsystem) ConnectAddress(key string) (string, bool) {
+// Dialer returns the process-wide Agora dialer for agora-backend tunnels.
+func (s *Subsystem) Dialer() *Dialer {
 	if s == nil {
-		return "", false
+		return nil
 	}
-	status, ok := s.connects[key]
-	if !ok || status == nil || status.ListenAddress == "" {
-		return "", false
-	}
-	return status.ListenAddress, true
+	return s.dialer
 }
 
-// Close tears down Agora catalog, serve, connect, and agent resources.
+// Close tears down Agora catalog, serve, dial, and agent resources. Deleting a
+// tunnel or detaching revokes at the controller; OpenZiti terminates live
+// sessions. Cleanup continues even if a step fails, logging each failure.
 func (s *Subsystem) Close() error {
 	if s == nil || s.closed {
 		return nil
@@ -403,42 +310,39 @@ func (s *Subsystem) Close() error {
 	s.closed = true
 
 	var firstErr error
+	recordErr := func(err error) {
+		if err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+
 	if s.advertisement != nil {
 		if err := s.withCleanupContext(func(ctx context.Context) error {
 			return s.ops.Retract(ctx, s.agent, s.advertisement.ID)
 		}); err != nil {
 			s.log.Warnf("failed to retract agora advertisement '%s': %v", s.advertisement.ID, err)
-			firstErr = err
+			recordErr(err)
 		}
 		s.advertisement = nil
 	}
 
-	if s.serveStatus != nil {
+	if s.serve != nil {
 		if err := s.withCleanupContext(func(ctx context.Context) error {
-			return s.ops.RemoveServe(ctx, s.agent, s.identity.InstanceName)
+			return s.serve.Close(ctx)
 		}); err != nil {
-			s.log.Warnf("failed to remove agora serve '%s': %v", s.identity.InstanceName, err)
-			if firstErr == nil {
-				firstErr = err
-			}
+			s.log.Warnf("failed to close agora serve: %v", err)
+			recordErr(err)
 		}
-		s.serveStatus = nil
+		s.serve = nil
 	}
 
-	for key, status := range s.connects {
-		status := status
-		if status == nil {
-			continue
-		}
+	if s.dialer != nil {
 		if err := s.withCleanupContext(func(ctx context.Context) error {
-			return s.ops.RemoveConnect(ctx, s.agent, status.Name, status.ListenAddress)
+			return s.dialer.Close(ctx)
 		}); err != nil {
-			s.log.Warnf("failed to remove agora connect '%s': %v", key, err)
-			if firstErr == nil {
-				firstErr = err
-			}
+			s.log.Warnf("failed to close agora dialer: %v", err)
+			recordErr(err)
 		}
-		delete(s.connects, key)
 	}
 
 	if s.agent != nil {
@@ -446,9 +350,7 @@ func (s *Subsystem) Close() error {
 			return s.ops.Close(ctx, s.agent)
 		}); err != nil {
 			s.log.Warnf("failed to close agora agent: %v", err)
-			if firstErr == nil {
-				firstErr = err
-			}
+			recordErr(err)
 		}
 	}
 
@@ -459,13 +361,4 @@ func (s *Subsystem) withCleanupContext(fn func(context.Context) error) error {
 	ctx, cancel := context.WithTimeout(context.Background(), cleanupTimeout)
 	defer cancel()
 	return fn(ctx)
-}
-
-func allocateLoopbackPort() (string, error) {
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		return "", fmt.Errorf("allocate agora connect port: %w", err)
-	}
-	defer listener.Close()
-	return listener.Addr().String(), nil
 }

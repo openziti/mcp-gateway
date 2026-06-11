@@ -2,31 +2,32 @@ package gateway
 
 import (
 	"context"
+	"net/http"
 	"strings"
 	"testing"
 
 	"github.com/openziti/mcp-gateway/aggregator"
 )
 
-func TestClientSessionAgoraBackendRequiresResolver(t *testing.T) {
+func TestClientSessionAgoraBackendRequiresDialClient(t *testing.T) {
 	session := &ClientSession{}
 
 	_, err := session.connectBackend(context.Background(), testAgoraSessionBackendConfig())
-	if err == nil || !strings.Contains(err.Error(), "agora connect resolver is not configured") {
-		t.Fatalf("expected missing resolver error, got %v", err)
+	if err == nil || !strings.Contains(err.Error(), "agora dial client is not configured") {
+		t.Fatalf("expected missing dial client error, got %v", err)
 	}
 }
 
-func TestClientSessionAgoraBackendRequiresResolvedAddress(t *testing.T) {
+func TestClientSessionAgoraBackendPropagatesDialError(t *testing.T) {
 	session := &ClientSession{
-		resolver: func(string) (string, bool) {
-			return "", false
+		agoraDial: func(string) (*http.Client, error) {
+			return nil, context.DeadlineExceeded
 		},
 	}
 
 	_, err := session.connectBackend(context.Background(), testAgoraSessionBackendConfig())
-	if err == nil || !strings.Contains(err.Error(), "agora connect address for backend 'remote' was not initialized") {
-		t.Fatalf("expected unresolved address error, got %v", err)
+	if err == nil || !strings.Contains(err.Error(), "agora dial client for backend 'remote'") {
+		t.Fatalf("expected propagated dial client error, got %v", err)
 	}
 }
 

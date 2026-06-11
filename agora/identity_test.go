@@ -1,7 +1,6 @@
 package agora
 
 import (
-	"strings"
 	"testing"
 )
 
@@ -9,7 +8,6 @@ func TestResolveIdentityUsesDefaults(t *testing.T) {
 	identity, err := resolveIdentity(&Config{}, Defaults{
 		InstanceName:    "mcp-bridge",
 		Description:     "MCP single-server bridge",
-		TunnelMode:      "tcp",
 		AgentNamePrefix: "mcp-bridge",
 	})
 	if err != nil {
@@ -22,9 +20,6 @@ func TestResolveIdentityUsesDefaults(t *testing.T) {
 	if identity.Description != "MCP single-server bridge" {
 		t.Fatalf("description = %q", identity.Description)
 	}
-	if identity.TunnelMode != "tcp" {
-		t.Fatalf("tunnel mode = %q", identity.TunnelMode)
-	}
 	if identity.AgentName != "mcp-bridge-mcp-bridge" {
 		t.Fatalf("agent name = %q", identity.AgentName)
 	}
@@ -34,11 +29,9 @@ func TestResolveIdentityConfigOverridesDefaults(t *testing.T) {
 	identity, err := resolveIdentity(&Config{
 		InstanceName: "engineering",
 		Description:  "engineering gateway",
-		TunnelMode:   "http",
 	}, Defaults{
 		InstanceName:    "mcp-gateway",
 		Description:     "MCP tool gateway",
-		TunnelMode:      "tcp",
 		AgentNamePrefix: "mcp-gateway",
 	})
 	if err != nil {
@@ -51,30 +44,23 @@ func TestResolveIdentityConfigOverridesDefaults(t *testing.T) {
 	if identity.Description != "engineering gateway" {
 		t.Fatalf("description = %q", identity.Description)
 	}
-	if identity.TunnelMode != "http" {
-		t.Fatalf("tunnel mode = %q", identity.TunnelMode)
-	}
 	if identity.AgentName != "mcp-gateway-engineering" {
 		t.Fatalf("agent name = %q", identity.AgentName)
 	}
 }
 
-func TestResolveIdentityRejectsDisallowedTunnelMode(t *testing.T) {
-	_, err := resolveIdentity(&Config{TunnelMode: "udp"}, Defaults{
-		TunnelMode:         "tcp",
-		AllowedTunnelModes: []string{"tcp", "http"},
-	})
-	if err == nil || !strings.Contains(err.Error(), "invalid agora tunnel_mode") {
-		t.Fatalf("expected invalid tunnel mode error, got %v", err)
+func TestServeTunnelNameDefaultsToInstanceName(t *testing.T) {
+	if got := serveTunnelName(&Config{}, "engineering"); got != "engineering" {
+		t.Fatalf("serve tunnel name = %q, want instance name", got)
+	}
+	if got := serveTunnelName(&Config{Serve: &ServeConfig{Enabled: true}}, "engineering"); got != "engineering" {
+		t.Fatalf("serve tunnel name = %q, want instance name when serve.tunnel empty", got)
 	}
 }
 
-func TestResolveIdentityAllowsAllSdkModesByDefault(t *testing.T) {
-	identity, err := resolveIdentity(&Config{TunnelMode: "udp"}, Defaults{})
-	if err != nil {
-		t.Fatalf("resolveIdentity returned error: %v", err)
-	}
-	if identity.TunnelMode != "udp" {
-		t.Fatalf("tunnel mode = %q", identity.TunnelMode)
+func TestServeTunnelNameUsesConfiguredTunnel(t *testing.T) {
+	cfg := &Config{Serve: &ServeConfig{Enabled: true, Tunnel: "persistent-share"}}
+	if got := serveTunnelName(cfg, "engineering"); got != "persistent-share" {
+		t.Fatalf("serve tunnel name = %q, want %q", got, "persistent-share")
 	}
 }

@@ -15,7 +15,6 @@ agora:
   enabled: true
   instance_name: "mcp-gateway"
   description: "MCP Gateway demo"
-  tunnel_mode: "tcp"
   serve:
     enabled: true
   advertisement:

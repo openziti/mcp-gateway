@@ -14,7 +14,7 @@ type SessionFactory struct {
 	config    *Config
 	namespace *aggregator.Namespace
 	impl      *mcp.Implementation
-	resolver  aggregator.ConnectResolver
+	agoraDial aggregator.AgoraDialClient
 
 	mu       sync.Mutex
 	sessions map[string]*ClientSession
@@ -22,11 +22,11 @@ type SessionFactory struct {
 
 // NewSessionFactory creates a factory for client sessions.
 // the namespace should be pre-populated with all available tools from backends.
-func NewSessionFactory(config *Config, namespace *aggregator.Namespace, resolver aggregator.ConnectResolver) *SessionFactory {
+func NewSessionFactory(config *Config, namespace *aggregator.Namespace, agoraDial aggregator.AgoraDialClient) *SessionFactory {
 	return &SessionFactory{
 		config:    config,
 		namespace: namespace,
-		resolver:  resolver,
+		agoraDial: agoraDial,
 		impl: &mcp.Implementation{
 			Name:    config.Aggregator.Name,
 			Version: config.Aggregator.Version,
@@ -38,7 +38,7 @@ func NewSessionFactory(config *Config, namespace *aggregator.Namespace, resolver
 // CreateSession creates a new isolated session with connections to all backends.
 // the caller is responsible for calling session.Close() when done.
 func (f *SessionFactory) CreateSession(ctx context.Context, client *ClientContext) (*ClientSession, error) {
-	session, err := NewClientSession(ctx, f.config, f.namespace, client, f.resolver)
+	session, err := NewClientSession(ctx, f.config, f.namespace, client, f.agoraDial)
 	if err != nil {
 		return nil, err
 	}

@@ -112,11 +112,31 @@ func TestApplyOverridesAgoraNetwork(t *testing.T) {
 		if cfg.Agora == nil || !cfg.Agora.Enabled || cfg.Agora.Serve == nil || !cfg.Agora.Serve.Enabled {
 			t.Fatalf("agora serve was not enabled: %#v", cfg.Agora)
 		}
-		if cfg.Agora.Advertisement == nil || cfg.Agora.Advertisement.Publish == nil || !*cfg.Agora.Advertisement.Publish {
-			t.Fatalf("agora publish was not enabled: %#v", cfg.Agora.Advertisement)
+		// publish is left at its default (nil), not forced on, so enrolled
+		// accounts without workgroup IDs can serve without publishing.
+		if cfg.Agora.Advertisement != nil {
+			t.Fatalf("advertisement config should be left untouched: %#v", cfg.Agora.Advertisement)
 		}
 		if cfg.Zrok == nil || cfg.Zrok.Share == nil || cfg.Zrok.Share.Enabled {
 			t.Fatalf("zrok share was not disabled: %#v", cfg.Zrok)
+		}
+	})
+}
+
+func TestApplyOverridesAgoraTunnelFlag(t *testing.T) {
+	withBridgeGlobals(t, func() {
+		network = "agora"
+		agoraTunnel = " lore "
+		cfg := &bridge.Config{Command: "backend"}
+
+		if err := applyOverrides(cfg); err != nil {
+			t.Fatalf("applyOverrides returned error: %v", err)
+		}
+		if cfg.Agora == nil || cfg.Agora.Serve == nil || cfg.Agora.Serve.Tunnel != "lore" {
+			t.Fatalf("agora tunnel flag was not applied: %#v", cfg.Agora)
+		}
+		if !cfg.Agora.Serve.Enabled {
+			t.Fatalf("agora serve should remain enabled: %#v", cfg.Agora.Serve)
 		}
 	})
 }
@@ -200,8 +220,8 @@ func TestApplyOverridesPreservesExistingAgoraFields(t *testing.T) {
 		if cfg.Agora.APIEndpoint != "http://controller.example" {
 			t.Fatalf("api endpoint was overwritten: %q", cfg.Agora.APIEndpoint)
 		}
-		if cfg.Agora.Advertisement.Publish == nil || !*cfg.Agora.Advertisement.Publish {
-			t.Fatalf("network=agora should force publish true: %#v", cfg.Agora.Advertisement.Publish)
+		if cfg.Agora.Advertisement.Publish == nil || *cfg.Agora.Advertisement.Publish {
+			t.Fatalf("network=agora must preserve an explicit publish=false: %#v", cfg.Agora.Advertisement.Publish)
 		}
 	})
 }
@@ -209,12 +229,13 @@ func TestApplyOverridesPreservesExistingAgoraFields(t *testing.T) {
 func withBridgeGlobals(t *testing.T, fn func()) {
 	t.Helper()
 	origEnv, origWorkingDir, origShareToken := env, workingDir, shareToken
-	origNetwork, origIntegrationFile := network, agoraIntegrationFile
+	origNetwork, origTunnel, origIntegrationFile := network, agoraTunnel, agoraIntegrationFile
 	defer func() {
 		env = origEnv
 		workingDir = origWorkingDir
 		shareToken = origShareToken
 		network = origNetwork
+		agoraTunnel = origTunnel
 		agoraIntegrationFile = origIntegrationFile
 	}()
 
@@ -222,6 +243,7 @@ func withBridgeGlobals(t *testing.T, fn func()) {
 	workingDir = ""
 	shareToken = ""
 	network = ""
+	agoraTunnel = ""
 	agoraIntegrationFile = ""
 	fn()
 }

@@ -32,7 +32,7 @@ type Bridge struct {
 	share          *gateway.Share
 	httpServer     *http.Server
 	agoraServer    *http.Server
-	agoraListener  net.Listener
+	agoraServe     *mcpagora.Serve
 	agoraSubsystem *mcpagora.Subsystem
 	mu             sync.Mutex
 	sessions       map[string]*bridgeSession
@@ -98,24 +98,13 @@ func (b *Bridge) Start(ctx context.Context) (err error) {
 		b.httpServer = &http.Server{Handler: handler}
 	}
 
-	if b.cfg.AgoraServeEnabled() {
-		listener, err := net.Listen("tcp", "127.0.0.1:0")
-		if err != nil {
-			return fmt.Errorf("failed to create agora listener: %w", err)
-		}
-		b.agoraListener = listener
-		b.agoraServer = &http.Server{Handler: handler}
-	}
-
 	if b.cfg.Agora != nil && b.cfg.Agora.Enabled {
 		subsys, err := mcpagora.NewSubsystem(mcpagora.SubsystemOptions{
 			Config: b.cfg.Agora,
 			Defaults: mcpagora.Defaults{
-				InstanceName:       "mcp-bridge",
-				Description:        "MCP single-server bridge",
-				TunnelMode:         "tcp",
-				AgentNamePrefix:    "mcp-bridge",
-				AllowedTunnelModes: []string{"tcp", "http"},
+				InstanceName:    "mcp-bridge",
+				Description:     "MCP single-server bridge",
+				AgentNamePrefix: "mcp-bridge",
 			},
 			Capabilities:  mcpagora.Derive([]string{"mcp-tools"}, bridgeCapabilityExtras(b.cfg)),
 			ServeWanted:   b.cfg.AgoraServeEnabled(),
@@ -125,8 +114,16 @@ func (b *Bridge) Start(ctx context.Context) (err error) {
 			return err
 		}
 		b.agoraSubsystem = subsys
-		if err := b.agoraSubsystem.BootstrapConnects(ctx); err != nil {
-			return err
+
+		if b.cfg.AgoraServeEnabled() {
+			// create-or-bind the serve tunnel and bind the MCP handler directly
+			// to the Agora net.Listener — no loopback hop.
+			serve, err := b.agoraSubsystem.Serve(ctx)
+			if err != nil {
+				return fmt.Errorf("failed to serve agora tunnel: %w", err)
+			}
+			b.agoraServe = serve
+			b.agoraServer = &http.Server{Handler: handler}
 		}
 	}
 
@@ -397,29 +394,20 @@ func (b *Bridge) Run(ctx context.Context) error {
 		dl.Log().Info("serving mcp over zrok share")
 	}
 
-	if b.agoraServer != nil && b.agoraListener != nil {
+	if b.agoraServer != nil && b.agoraServe != nil {
 		servers = append(servers, b.agoraServer)
-		serveHTTP(b.agoraServer, b.agoraListener, errCh, "agora")
-		dl.Log().With("listen", b.agoraListener.Addr().String()).Info("serving mcp for agora tunnel")
+		serveHTTP(b.agoraServer, b.agoraServe.Listener(), errCh, "agora")
+		dl.Log().With("tunnel", b.agoraSubsystem.ServeTunnelName()).Info("serving mcp for agora tunnel")
 	}
 
 	if len(servers) == 0 {
 		return fmt.Errorf("no bridge listeners are configured")
 	}
 
-	if b.agoraSubsystem != nil {
-		if b.cfg.AgoraServeEnabled() {
-			target := b.agoraServeBackendTarget()
-			if err := b.agoraSubsystem.StartServing(ctx, target); err != nil {
-				shutdownHTTPServers(servers)
-				return err
-			}
-		}
-		if b.cfg.AgoraPublishEnabled() {
-			if err := b.agoraSubsystem.StartPublishing(ctx); err != nil {
-				shutdownHTTPServers(servers)
-				return err
-			}
+	if b.agoraSubsystem != nil && b.cfg.AgoraPublishEnabled() {
+		if err := b.agoraSubsystem.StartPublishing(ctx); err != nil {
+			shutdownHTTPServers(servers)
+			return err
 		}
 	}
 
@@ -454,13 +442,8 @@ func (b *Bridge) Stop() error {
 		}
 	}
 
-	if b.agoraListener != nil {
-		if err := b.agoraListener.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
-			dl.Log().With("error", err).Warn("error closing agora listener")
-			lastErr = err
-		}
-	}
-
+	// Close tears down the serve listener (deleting the tunnel only if we
+	// created it) and closes the agent.
 	if b.agoraSubsystem != nil {
 		if err := b.agoraSubsystem.Close(); err != nil {
 			dl.Log().With("error", err).Warn("error closing agora subsystem")
@@ -514,22 +497,6 @@ func shutdownHTTPServers(servers []*http.Server) error {
 		}
 	}
 	return errors.Join(errs...)
-}
-
-func (b *Bridge) agoraServeBackendTarget() string {
-	if b.agoraListener == nil {
-		return ""
-	}
-
-	address := b.agoraListener.Addr().String()
-	mode := "tcp"
-	if b.cfg != nil && b.cfg.Agora != nil && strings.TrimSpace(b.cfg.Agora.TunnelMode) != "" {
-		mode = strings.ToLower(strings.TrimSpace(b.cfg.Agora.TunnelMode))
-	}
-	if mode == "http" {
-		return "http://" + address
-	}
-	return address
 }
 
 func bridgeCapabilityExtras(cfg *Config) []string {

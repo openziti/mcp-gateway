@@ -36,6 +36,11 @@ func ConnectWithTimeout(ctx context.Context, timeout time.Duration, connect func
 			cancel()
 			return nil, result.err
 		}
+		// the session was connected on sessionCtx and must outlive this call,
+		// so we cannot cancel here. sessionCtx is a child of ctx, so release
+		// it when ctx is done (which already auto-cancels it) — explicit
+		// handoff cleanup rather than a leaked cancel.
+		context.AfterFunc(ctx, cancel)
 		return result.session, nil
 	case <-ctx.Done():
 		cancel()

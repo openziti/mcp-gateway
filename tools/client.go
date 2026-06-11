@@ -110,14 +110,15 @@ func (c *Client) buildTransport(ctx context.Context) (mcp.Transport, error) {
 			}
 			c.agoraClient = agoraClient
 		}
-		loopbackAddr, err := c.agoraClient.Dial(ctx, c.agoraTunnel)
+		httpClient, err := c.agoraClient.Attach(ctx, c.agoraTunnel)
 		if err != nil {
 			c.closeTransport()
 			return nil, fmt.Errorf("failed to dial agora tunnel: %w", err)
 		}
 		return &mcp.SSEClientTransport{
-			Endpoint:   "http://" + loopbackAddr + "/sse",
-			HTTPClient: http.DefaultClient,
+			// the host doesn't matter for routing since agora handles it
+			Endpoint:   "http://mcp-backend/sse",
+			HTTPClient: httpClient,
 		}, nil
 	}
 
@@ -140,7 +141,6 @@ func newAgoraClient(cfg *mcpagora.Config) (*mcpagora.Client, error) {
 		Defaults: mcpagora.Defaults{
 			InstanceName:    "mcp-tools",
 			Description:     "MCP tools client",
-			TunnelMode:      "tcp",
 			AgentNamePrefix: "mcp-tools",
 		},
 	})

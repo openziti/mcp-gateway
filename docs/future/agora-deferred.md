@@ -1,19 +1,28 @@
 # Agora Integration — Deferred Work
 
-The Agora integration shipped across `mcp-gateway`, `mcp-bridge`, and `mcp-tools` (serve, publish, and per-backend connect over Layer 1 tunnels). This note records the work that was consciously left out of that slice, so the deferral is intentional rather than forgotten. The realized behavior lives in [../current/agora.md](../current/agora.md).
+The Agora integration shipped across `mcp-gateway`, `mcp-bridge`, and `mcp-tools` (serve, publish, and per-backend connect over Layer 1 tunnels). It was then migrated off the v0.1.0 managed-proxy tunnel API and its loopback workaround onto the SDK's thin `Listen`/`Dial` primitives, embedding Agora the way zrok is embedded. This note records what remains deliberately out of scope. The realized behavior lives in [../current/agora.md](../current/agora.md).
 
-## Persistent named shares over Agora
+## Resolved by the Listen/Dial migration
 
-zrok has named, persistent shares; an operator can reserve `my-gateway` and have clients reconnect to the same token across restarts. Agora has no direct analogue today — Layer 1 tunnels are named per-runtime, and catalog advertisements record presence rather than a stable dial target. Revisit when Layer 2 advertisements grow stable-name semantics; until then, Agora dial targets are tunnel names resolved at connect time.
+Four items from the original deferral list are no longer pending — the transport swap dissolved or delivered them:
 
-## Multiplexing one connect across multiple backends
-
-Each `transport.type: agora` backend currently gets its own connect and its own loopback listener. When several backends point at the same upstream Agora service, this allocates redundant connects. It is correct and not a blocker, just inefficient. A future change could share one connect (and one loopback) across backends that resolve to the same tunnel, keyed by tunnel name rather than backend ID.
+- **Persistent named shares over Agora — delivered.** Create-or-bind serving means an operator (or demo-bootstrap) can provision a tunnel once; the gateway binds to it under `serve.tunnel` and leaves it intact across restarts. This is the analogue to `zrok create share my-gateway`.
+- **Multiplexing one connect across multiple backends — dissolved.** There is no loopback connect left to multiplex. Each `transport.type: agora` backend dials its tunnel directly; backends naming the same tunnel share a single startup attachment by construction.
+- **Hardening the loopback serve/connect listeners — dropped.** There is no loopback listener left to harden. The security boundary returned to the fabric, exactly as it is for zrok.
+- **Swap the local `replace` for a tagged Agora release — done.** The migration was developed against a temporary `replace github.com/openziti/agora => <local checkout>` while the `Listen`/`Dial` primitives (and the additive `tunnel.Get` helper used for the wrong-mode bind check) lived on untagged Agora HEAD. Agora v0.1.3 ships both; `go.mod` now requires `v0.1.3` with no `replace`.
 
 ## Unifying mcp-tools' two transport paths
 
-`mcp-tools` keeps its zrok and Agora dial paths parallel and uncombined. In particular, `--agora` does not write the Agora identity into the local zrok metadata cache. Merging the two paths would let a single invocation reason about both fabrics, but the parallel design is simpler and keeps existing zrok invocations (and Claude Desktop configs) unchanged. Unify only if a concrete use case needs one client to span both transports.
+`mcp-tools` keeps its zrok and Agora dial paths parallel and uncombined. The migration made them structurally symmetric (`Serve`↔`Share`, `Dialer`↔`Access`), so merging is now nearly free — but still optional. The parallel design keeps existing zrok invocations (and Claude Desktop configs) unchanged. Unify only if a concrete use case needs one client to span both fabrics.
 
-## Hardening the loopback serve/connect listeners
+## Reconnect / resilience for long-lived serve
 
-The Agora serve target and per-backend connects are plain `127.0.0.1` listeners with no rate limiting and no TLS. For the MVP, the loopback boundary is the security boundary — only local processes can reach these listeners. Production hardening (authn on the loopback hop, TLS, connection limits) is deferred until there's a deployment that needs more than the loopback boundary provides.
+The thin primitives carry no heartbeat, retry, or managed status. A revoked tunnel surfaces as a `net.Listener` or `net.Conn` error, exactly as zrok's listener does — matching zrok's posture is the MVP. Any active-healing layer is a separate concern, adjacent to the [gateway-wedge-resilience](./gateway-wedge-resilience.md) thinking, and not pulled in here.
+
+## Cross-org dial policy design
+
+`Dial` resolves cross-org via can-connect authorization while `Listen` is same-org. Exposing and shaping that policy surface — who may dial whose tunnels across organizations — is future product work, out of scope for the transport swap.
+
+## Dynamic backend add/remove at runtime
+
+Backend config is static at startup, so the dialer attaches each unique tunnel once at startup and detaches everything at shutdown — no per-backend ref-counting. Supporting backends that come and go while the process runs would require ref-counted attachments; revisit if runtime backend churn becomes a requirement.

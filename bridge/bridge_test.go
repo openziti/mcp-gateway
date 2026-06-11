@@ -1,27 +1,10 @@
 package bridge
 
 import (
-	"net"
 	"testing"
 
 	mcpagora "github.com/openziti/mcp-gateway/agora"
 )
-
-type fakeListener struct {
-	addr net.Addr
-}
-
-func (f fakeListener) Accept() (net.Conn, error) {
-	return nil, net.ErrClosed
-}
-
-func (f fakeListener) Close() error {
-	return nil
-}
-
-func (f fakeListener) Addr() net.Addr {
-	return f.addr
-}
 
 func TestBridgeCommandTagInference(t *testing.T) {
 	tests := []struct {
@@ -84,27 +67,5 @@ func TestBridgeCapabilityExtrasAddsServeTag(t *testing.T) {
 		if got[i] != want[i] {
 			t.Fatalf("extras = %#v, want %#v", got, want)
 		}
-	}
-}
-
-func TestAgoraServeBackendTargetFormatsByTunnelMode(t *testing.T) {
-	tcpBridge := &Bridge{
-		cfg: &Config{Agora: &mcpagora.Config{TunnelMode: "tcp"}},
-		agoraListener: fakeListener{
-			addr: &net.TCPAddr{IP: net.ParseIP("127.0.0.1"), Port: 43210},
-		},
-	}
-	if got := tcpBridge.agoraServeBackendTarget(); got != "127.0.0.1:43210" {
-		t.Fatalf("tcp backend target = %q", got)
-	}
-
-	httpBridge := &Bridge{
-		cfg: &Config{Agora: &mcpagora.Config{TunnelMode: "http"}},
-		agoraListener: fakeListener{
-			addr: &net.TCPAddr{IP: net.ParseIP("127.0.0.1"), Port: 43211},
-		},
-	}
-	if got := httpBridge.agoraServeBackendTarget(); got != "http://127.0.0.1:43211" {
-		t.Fatalf("http backend target = %q", got)
 	}
 }

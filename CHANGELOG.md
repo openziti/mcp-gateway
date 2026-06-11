@@ -1,5 +1,9 @@
 # CHANGELOG
 
+## v0.1.4
+
+FEATURE: Initial support for Agora networks alongside zrok.
+
 ## v0.1.3
 
 FEATURE: Support for HTTP/S MCP servers (SSE/streamable) from `mcp-gateway`. See the example configuration in `etc/mcp-gateway.yml` for details. (https://github.com/openziti/mcp-gateway/issues/14)

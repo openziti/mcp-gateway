@@ -8,27 +8,20 @@ import (
 const (
 	defaultInstanceName    = "mcp-gateway"
 	defaultDescription     = "MCP gateway"
-	defaultTunnelMode      = "tcp"
 	defaultAgentNamePrefix = "mcp-gateway"
-	defaultAllowedModeTCP  = "tcp"
-	defaultAllowedModeHTTP = "http"
-	defaultAllowedModeUDP  = "udp"
 )
 
 // Defaults supplies per-binary identity defaults.
 type Defaults struct {
-	InstanceName       string
-	Description        string
-	TunnelMode         string
-	AgentNamePrefix    string
-	AllowedTunnelModes []string
+	InstanceName    string
+	Description     string
+	AgentNamePrefix string
 }
 
 // Identity is the resolved Agora identity for this process.
 type Identity struct {
 	InstanceName string
 	Description  string
-	TunnelMode   string
 	AgentName    string
 }
 
@@ -53,17 +46,6 @@ func resolveIdentity(cfg *Config, defaults Defaults) (Identity, error) {
 		description = defaultDescription
 	}
 
-	tunnelMode := strings.ToLower(strings.TrimSpace(cfg.TunnelMode))
-	if tunnelMode == "" {
-		tunnelMode = strings.ToLower(strings.TrimSpace(defaults.TunnelMode))
-	}
-	if tunnelMode == "" {
-		tunnelMode = defaultTunnelMode
-	}
-	if !modeAllowed(tunnelMode, defaults.AllowedTunnelModes) {
-		return Identity{}, fmt.Errorf("invalid agora tunnel_mode '%s'", cfg.TunnelMode)
-	}
-
 	prefix := strings.TrimSpace(defaults.AgentNamePrefix)
 	if prefix == "" {
 		prefix = defaultAgentNamePrefix
@@ -72,19 +54,20 @@ func resolveIdentity(cfg *Config, defaults Defaults) (Identity, error) {
 	return Identity{
 		InstanceName: instanceName,
 		Description:  description,
-		TunnelMode:   tunnelMode,
 		AgentName:    prefix + "-" + instanceName,
 	}, nil
 }
 
-func modeAllowed(mode string, allowed []string) bool {
-	if len(allowed) == 0 {
-		allowed = []string{defaultAllowedModeTCP, defaultAllowedModeHTTP, defaultAllowedModeUDP}
-	}
-	for _, candidate := range allowed {
-		if mode == strings.ToLower(strings.TrimSpace(candidate)) {
-			return true
+// serveTunnelName is the single source of truth for the create-or-bind serve
+// tunnel name. It is both the name Serve binds/creates and the catalog
+// advertisement Name (the client's dial key), so the two can never diverge.
+// It resolves regardless of whether serving is enabled in this process: a
+// publish-only gateway still advertises the name clients should dial.
+func serveTunnelName(cfg *Config, instanceName string) string {
+	if cfg != nil && cfg.Serve != nil {
+		if name := strings.TrimSpace(cfg.Serve.Tunnel); name != "" {
+			return name
 		}
 	}
-	return false
+	return instanceName
 }

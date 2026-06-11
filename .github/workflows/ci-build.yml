@@ -23,11 +23,24 @@ jobs:
         with:
           go-version-file: ./go.mod
 
-      - name: make install
-        run: make install
+      - name: build and install binaries
+        shell: bash
+        run: |
+          module="github.com/openziti/mcp-gateway"
+          version="$(git describe --tags --always --dirty 2>/dev/null || echo dev)"
+          hash="$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
+          date="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          go install -ldflags "-s -w \
+            -X ${module}/build.Version=${version} \
+            -X ${module}/build.Hash=${hash} \
+            -X ${module}/build.Date=${date} \
+            -X ${module}/build.BuiltBy=github-actions" ./...
 
-      - name: make test
-        run: make test
+      - name: test and vet
+        shell: bash
+        run: |
+          go test ./... -count=1
+          go vet ./...
 
       - name: solve GOBIN
         id: solve_go_bin

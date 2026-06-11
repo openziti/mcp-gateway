@@ -21,12 +21,14 @@ Agora mode requires:
 
 - An enrolled Agora environment on the host running the binary.
 - A reachable Agora controller.
-- An `agora.api_endpoint` value matching the enrolled environment.
 - A Ziti fabric reachable by the Agora runtime.
 
-The `api_endpoint` value is validate-only. The code compares it with the
-endpoint in the enrolled Agora environment and exits if they differ; it does
-not rewrite Agora environment files.
+The enrolled environment is the source of truth for the controller endpoint.
+`agora.api_endpoint` is an optional validate-only cross-check: when set, the
+code compares it with the endpoint in the enrolled Agora environment and exits
+if they differ; it does not rewrite Agora environment files. When unset, the
+enrolled environment endpoint is used as-is — so an enrolled host can run
+`--network=agora` with no Agora config at all.
 
 For demo-bootstrap or other provisioning flows, prefer an integration file.
 The integration file carries provisioned environment and catalog IDs while the
@@ -54,11 +56,11 @@ agora:
 
   instance_name: "mcp-gateway"
   description: "MCP gateway"
-  tunnel_mode: tcp              # tcp, http, or udp; default: tcp
 
   serve:
     enabled: true
-    grants: []
+    tunnel: "mcp-gateway"       # create-or-bind name; default: instance_name
+    grants: []                  # applied only on the create path
 
   advertisement:
     publish: true               # default true when agora.enabled is true
@@ -93,6 +95,16 @@ mcp-bridge \
   --network=agora \
   --agora-integration-file /path/to/integration.mcp-bridge.yaml \
   mcp-filesystem /tmp
+```
+
+`--agora-tunnel <name>` names the serve tunnel (and therefore the published
+advertisement, which always carries the dial key). Without it, the tunnel is
+named after the instance (`mcp-bridge`). The flag uses the same create-or-bind
+semantics as `serve.tunnel`: bind to a pre-provisioned tunnel and leave it
+intact, or create an ephemeral one and delete it on shutdown.
+
+```bash
+mcp-bridge --network=agora --agora-tunnel lore -- lore serve --repo ~/grimoire --read-only
 ```
 
 Bridge advertisements derive capabilities from `mcp-tools`, the bridged
@@ -140,8 +152,9 @@ CLI flag is not provided.
 | Command or flag | Effect |
 |---|---|
 | `mcp-bridge <command> [args...]` | Existing zrok bridge behavior |
-| `--network=agora` | Enables Agora serve and publish, disables zrok share |
+| `--network=agora` | Enables Agora serve, disables zrok share; publishing follows its default (publish when workgroup IDs are available) |
 | `--network=zrok` | Existing zrok behavior |
+| `--agora-tunnel <name>` | Serve-tunnel name: bind if it exists (persistent), else create+delete (ephemeral); defaults to the instance name (`mcp-bridge`) |
 | `--agora-integration-file <path>` | Sets the Agora integration file |
 | `--env KEY=VALUE` | Passes environment values to the stdio MCP server |
 | `--working-dir <dir>` | Sets the stdio MCP server working directory |
@@ -204,6 +217,16 @@ When `agora.enabled: true`, advertisement publishing defaults to enabled.
 Set `advertisement.publish: false` to use Agora serving or backend connects
 without publishing a catalog card.
 
+Publishing requires workgroup scope IDs (controller-enforced). The
+`advertisement.publish` setting is a tri-state:
+
+- **Unset (default-on):** publishes when workgroup IDs are available; when none
+  are configured, the process logs a notice and runs serve-only instead of
+  failing. This lets an enrolled account run `--network=agora` with no
+  integration file.
+- **Explicit `true`:** missing workgroup IDs are a hard error.
+- **Explicit `false`:** never publishes.
+
 When publishing is enabled:
 
 - `advertisement.workgroup_ids` must contain at least one `wg_` ID.
@@ -224,10 +247,27 @@ When publishing is enabled:
 ## Serving Over Agora
 
 Set `agora.serve.enabled: true` to serve `mcp-gateway` over Agora. The gateway
-allocates a local loopback listener for Agora traffic and starts the same MCP
-HTTP/SSE handler used by the zrok listener.
+binds the same MCP HTTP/SSE handler used by the zrok listener directly to an
+Agora `net.Listener` returned by the SDK's thin `Listen` primitive. There is no
+loopback hop — the security boundary is the fabric, exactly as it is for zrok.
 
-For `mcp-gateway`, zrok and Agora are independent:
+**Create-or-bind serving.** `serve.tunnel` names the tunnel to serve, defaulting
+to `instance_name`. Resolution mirrors `gateway/share.go`'s managed/unmanaged
+fork:
+
+- If no tunnel exists under that name, the gateway **creates** it at startup
+  (TCP mode, applying `serve.grants`) and **deletes** it on shutdown. This is
+  the ephemeral path and preserves the original UX.
+- If a tunnel already exists under that name, the gateway **binds** to it and
+  **leaves it intact** across restarts. This is the persistent named share —
+  the analogue to `zrok create share my-gateway`. Grants on the bind path are
+  owned by whoever provisioned the tunnel (operator or demo-bootstrap tooling).
+
+An existing tunnel under the serve name whose mode is not TCP is a hard error
+rather than a silent bind.
+
+For `mcp-gateway`, zrok and Agora are independent and fully symmetric in how
+they embed:
 
 ```yaml
 zrok:
@@ -238,13 +278,16 @@ agora:
   enabled: true
   serve:
     enabled: true
+    tunnel: "mcp-gateway"
 ```
 
 For `mcp-bridge`, `--network=agora` selects Agora-only bridge mode for the
 invocation. It does not create a zrok share.
 
-For `tunnel_mode: http`, the serve backend target includes an `http://` scheme.
-TCP mode uses a host:port target.
+Tunnels are always created in a single stream mode (TCP); MCP always rides
+HTTP/SSE over that stream. The advertisement honestly labels what a client
+speaks (`tunnel_mode = "http"`); it is discovery metadata, not a transport
+switch, and there is no operator `tunnel_mode` knob.
 
 ## Per-Backend `transport.type: agora`
 
@@ -267,9 +310,14 @@ backends:
 the stdio, zrok, and HTTP transport fields. `agora.enabled: true` is required
 when any backend uses `transport.type: agora`.
 
-At startup, the gateway creates Agora connects for all Agora backends before
-backend discovery. Per-client sessions use the same loopback resolver, so tool
-calls and discovery route through the same Agora connection.
+At startup, the gateway **attaches** each unique `agora_tunnel` once — a
+control-plane reservation that provisions the OpenZiti dial policy out of the
+connection hot path — before backend discovery. Discovery and every per-client
+session then **dial** the tunnel directly through a shared HTTP client whose
+`DialContext` returns a raw `net.Conn` from the SDK's `Dial` primitive. Two
+backends naming the same tunnel share one attachment; there is no loopback
+listener and no backend-ID→port resolver in the path. The attachment is
+released once, at process shutdown.
 
 ## Connecting From mcp-tools
 
@@ -296,15 +344,19 @@ Agora startup follows this order:
 2. Apply CLI and environment overrides.
 3. Resolve the integration file.
 4. Validate config.
-5. Construct the Agora client or subsystem.
-6. Bootstrap Agora connects.
-7. Start local HTTP servers.
-8. Start Agora serve when enabled.
-9. Publish the advertisement when enabled.
+5. Construct the runtime-less Agora subsystem (one `*agent.Agent`, no embedded
+   runtime).
+6. Attach each unique Agora-backend tunnel.
+7. Create-or-bind the serve tunnel and open its `net.Listener`.
+8. Bind the MCP HTTP server to the Agora listener (and the zrok listener).
+9. Publish the advertisement when enabled, under the resolved serve-tunnel name.
 
-On shutdown, the subsystem retracts the advertisement, removes serve, removes
-connects, closes the Agora agent, and continues cleanup even if one Agora
-cleanup step fails.
+On shutdown, the subsystem retracts the advertisement, closes the serve listener
+(deleting the tunnel only when this process created it), detaches every dialer
+attachment, closes the Agora agent, and continues cleanup even if one Agora
+cleanup step fails. The thin primitives carry no heartbeat or active healing: a
+revoked tunnel surfaces as a `net.Listener` or `net.Conn` error, matching zrok's
+posture.
 
 ## Manual Smoke
 
@@ -312,8 +364,9 @@ Run these checks against a live Agora controller and Ziti fabric:
 
 | Scenario | Expected observation |
 |---|---|
-| Agora-only gateway: `agora.enabled: true`, `agora.serve.enabled: true`, `zrok.share.enabled: false` | `mcp-tools run --agora <gateway tunnel>` lists and calls tools |
+| Ephemeral Agora-only gateway: `agora.enabled: true`, `agora.serve.enabled: true`, `zrok.share.enabled: false` | `mcp-tools run --agora <gateway tunnel>` lists and calls tools; no `127.0.0.1` Agora listener exists in the process |
+| Persistent named tunnel: pre-provision the serve tunnel via `tunnel.Create`, set `serve.tunnel` to it, restart the gateway | clients reconnect under the same name across restarts; the tunnel is not deleted on shutdown |
 | Dual listener gateway: zrok share and Agora serve both enabled | zrok share token and Agora tunnel both respond |
-| Agora backend: gateway backend uses `transport.type: agora` against `mcp-bridge --network=agora` | Discovery and tool calls route through the remote bridge |
-| Catalog | The dashboard shows the `mcp-gateway` card with the gateway-product accent |
+| Agora backend: gateway backend uses `transport.type: agora` against `mcp-bridge --network=agora` | discovery and tool calls route through the remote bridge; two backends on one tunnel share one attachment |
+| Catalog | the dashboard shows the `mcp-gateway` card with the gateway-product accent |
 | HTTP mode | `mcp-tools http --agora <gateway tunnel> --bind 127.0.0.1:8080` exposes a local HTTP MCP endpoint |
