@@ -2,7 +2,7 @@
 
 ## v0.1.4
 
-FEATURE: Now uses the direct primitives in the Agora layer 1 SDK. Tunnel usage semantics now mirror the approach used for zrok shares.
+FEATURE: Initial support for Agora networks alongside zrok.
 
 ## v0.1.3
 
