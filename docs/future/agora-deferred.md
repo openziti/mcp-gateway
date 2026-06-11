@@ -4,15 +4,12 @@ The Agora integration shipped across `mcp-gateway`, `mcp-bridge`, and `mcp-tools
 
 ## Resolved by the Listen/Dial migration
 
-Three items from the original deferral list are no longer pending — the transport swap dissolved or delivered them:
+Four items from the original deferral list are no longer pending — the transport swap dissolved or delivered them:
 
 - **Persistent named shares over Agora — delivered.** Create-or-bind serving means an operator (or demo-bootstrap) can provision a tunnel once; the gateway binds to it under `serve.tunnel` and leaves it intact across restarts. This is the analogue to `zrok create share my-gateway`.
 - **Multiplexing one connect across multiple backends — dissolved.** There is no loopback connect left to multiplex. Each `transport.type: agora` backend dials its tunnel directly; backends naming the same tunnel share a single startup attachment by construction.
 - **Hardening the loopback serve/connect listeners — dropped.** There is no loopback listener left to harden. The security boundary returned to the fabric, exactly as it is for zrok.
-
-## Swap the local `replace` for a tagged Agora release
-
-`go.mod` carries a temporary `replace github.com/openziti/agora => /home/michael/Repos/nf/agora` while the `Listen`/`Dial` primitives (and the additive `tunnel.Get` helper used for the wrong-mode bind check) live on untagged Agora HEAD. This is a release-coordination follow-up, not design work: cut a tagged Agora release carrying these primitives and the helper, then drop the `replace` and bump the `require`. Tracked so the temporary `replace` cannot silently ship.
+- **Swap the local `replace` for a tagged Agora release — done.** The migration was developed against a temporary `replace github.com/openziti/agora => <local checkout>` while the `Listen`/`Dial` primitives (and the additive `tunnel.Get` helper used for the wrong-mode bind check) lived on untagged Agora HEAD. Agora v0.1.3 ships both; `go.mod` now requires `v0.1.3` with no `replace`.
 
 ## Unifying mcp-tools' two transport paths
 
