@@ -9,8 +9,8 @@ import (
 	"os"
 
 	"github.com/michaelquigley/df/dl"
+	"github.com/michaelquigley/push/build"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
-	"github.com/openziti/mcp-gateway/build"
 	"github.com/spf13/cobra"
 )
 
@@ -28,11 +28,10 @@ type listDirectoryParams struct {
 }
 
 var rootCmd = &cobra.Command{
-	Use:     "mcp-filesystem <dir> [dir...]",
-	Short:   "sandboxed filesystem MCP server",
-	Version: build.String(),
-	Args:    cobra.MinimumNArgs(1),
-	Run:     run,
+	Use:   "mcp-filesystem <dir> [dir...]",
+	Short: "sandboxed filesystem MCP server",
+	Args:  cobra.MinimumNArgs(1),
+	Run:   run,
 }
 
 func run(_ *cobra.Command, args []string) {

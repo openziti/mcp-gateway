@@ -5,10 +5,12 @@ builds:
   binary: mcp-gateway
   ldflags:
     - -s -w
-    - -X github.com/openziti/mcp-gateway/build.Version={{.Tag}}
-    - -X github.com/openziti/mcp-gateway/build.Hash={{.ShortCommit}}
-    - -X github.com/openziti/mcp-gateway/build.Date={{.Date}}
-    - -X github.com/openziti/mcp-gateway/build.BuiltBy=goreleaser
+    - -X github.com/michaelquigley/push/build.Version={{.Tag}}
+    - -X github.com/michaelquigley/push/build.Hash={{.ShortCommit}}
+    - -X github.com/michaelquigley/push/build.Date={{.Date}}
+    - -X github.com/michaelquigley/push/build.Builder=goreleaser
+    - -X github.com/michaelquigley/push/build.Branch={{.Branch}}
+    - -X github.com/michaelquigley/push/build.CGO=0
   env:
     - CGO_ENABLED=0
   goos:
@@ -21,10 +23,12 @@ builds:
   binary: mcp-bridge
   ldflags:
     - -s -w
-    - -X github.com/openziti/mcp-gateway/build.Version={{.Tag}}
-    - -X github.com/openziti/mcp-gateway/build.Hash={{.ShortCommit}}
-    - -X github.com/openziti/mcp-gateway/build.Date={{.Date}}
-    - -X github.com/openziti/mcp-gateway/build.BuiltBy=goreleaser
+    - -X github.com/michaelquigley/push/build.Version={{.Tag}}
+    - -X github.com/michaelquigley/push/build.Hash={{.ShortCommit}}
+    - -X github.com/michaelquigley/push/build.Date={{.Date}}
+    - -X github.com/michaelquigley/push/build.Builder=goreleaser
+    - -X github.com/michaelquigley/push/build.Branch={{.Branch}}
+    - -X github.com/michaelquigley/push/build.CGO=0
   env:
     - CGO_ENABLED=0
   goos:
@@ -37,10 +41,12 @@ builds:
   binary: mcp-tools
   ldflags:
     - -s -w
-    - -X github.com/openziti/mcp-gateway/build.Version={{.Tag}}
-    - -X github.com/openziti/mcp-gateway/build.Hash={{.ShortCommit}}
-    - -X github.com/openziti/mcp-gateway/build.Date={{.Date}}
-    - -X github.com/openziti/mcp-gateway/build.BuiltBy=goreleaser
+    - -X github.com/michaelquigley/push/build.Version={{.Tag}}
+    - -X github.com/michaelquigley/push/build.Hash={{.ShortCommit}}
+    - -X github.com/michaelquigley/push/build.Date={{.Date}}
+    - -X github.com/michaelquigley/push/build.Builder=goreleaser
+    - -X github.com/michaelquigley/push/build.Branch={{.Branch}}
+    - -X github.com/michaelquigley/push/build.CGO=0
   env:
     - CGO_ENABLED=0
   goos:
@@ -53,10 +59,12 @@ builds:
   binary: mcp-filesystem
   ldflags:
     - -s -w
-    - -X github.com/openziti/mcp-gateway/build.Version={{.Tag}}
-    - -X github.com/openziti/mcp-gateway/build.Hash={{.ShortCommit}}
-    - -X github.com/openziti/mcp-gateway/build.Date={{.Date}}
-    - -X github.com/openziti/mcp-gateway/build.BuiltBy=goreleaser
+    - -X github.com/michaelquigley/push/build.Version={{.Tag}}
+    - -X github.com/michaelquigley/push/build.Hash={{.ShortCommit}}
+    - -X github.com/michaelquigley/push/build.Date={{.Date}}
+    - -X github.com/michaelquigley/push/build.Builder=goreleaser
+    - -X github.com/michaelquigley/push/build.Branch={{.Branch}}
+    - -X github.com/michaelquigley/push/build.CGO=0
   env:
     - CGO_ENABLED=0
   goos:

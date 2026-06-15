@@ -5,6 +5,7 @@ go 1.25.7
 require (
 	github.com/google/uuid v1.6.0
 	github.com/michaelquigley/df v0.3.14
+	github.com/michaelquigley/push v0.2.1
 	github.com/modelcontextprotocol/go-sdk v1.1.0
 	github.com/openziti/agora v0.1.3
 	github.com/openziti/sdk-golang v1.5.4
@@ -66,6 +67,7 @@ require (
 	github.com/mattn/go-colorable v0.1.14 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/mgutz/ansi v0.0.0-20200706080929-d51e80ef957d // indirect
+	github.com/michaelquigley/figlet v0.1.0 // indirect
 	github.com/michaelquigley/pfxlog v0.6.10 // indirect
 	github.com/miekg/pkcs11 v1.1.2 // indirect
 	github.com/mitchellh/go-ps v1.0.0 // indirect
