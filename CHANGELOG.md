@@ -1,5 +1,9 @@
 # CHANGELOG
 
+## Unreleased
+
+CHANGE: Build-metadata versioning now uses the `github.com/michaelquigley/push` framework. Each binary (`mcp-gateway`, `mcp-bridge`, `mcp-tools`, `mcp-filesystem`) gains a `version` subcommand that prints the stamped version, commit, build date, branch, and builder. This replaces the previous `--version` flag.
+
 ## v0.1.5
 
 FEATURE: Initial support for Agora networks alongside zrok.

@@ -17,24 +17,33 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: setup-go
         uses: actions/setup-go@v5
         with:
           go-version-file: ./go.mod
 
+      - name: fetch push ci scripts
+        run: git clone --branch v0.2.1 --depth 1 https://github.com/michaelquigley/push.git _push
+
       - name: build and install binaries
         shell: bash
+        env:
+          CGO_ENABLED: '0'
         run: |
-          module="github.com/openziti/mcp-gateway"
-          version="$(git describe --tags --always --dirty 2>/dev/null || echo dev)"
-          hash="$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
-          date="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-          go install -ldflags "-s -w \
-            -X ${module}/build.Version=${version} \
-            -X ${module}/build.Hash=${hash} \
-            -X ${module}/build.Date=${date} \
-            -X ${module}/build.BuiltBy=github-actions" ./...
+          LDFLAGS=$(_push/ci/ldflags.sh)
+          go install -ldflags "${LDFLAGS}" ./...
+
+      - name: verify stamp
+        shell: bash
+        run: |
+          out=$("$(go env GOPATH)/bin/mcp-gateway" version)
+          if [ -z "${out}" ] || printf '%s\n' "${out}" | grep -F '[developer build]'; then
+            printf '%s\n' "${out}"
+            exit 1
+          fi
 
       - name: test and vet
         shell: bash
