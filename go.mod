@@ -4,10 +4,10 @@ go 1.25.7
 
 require (
 	github.com/google/uuid v1.6.0
-	github.com/michaelquigley/df v0.3.14
+	github.com/michaelquigley/df v1.0.1
 	github.com/michaelquigley/push v0.2.1
 	github.com/modelcontextprotocol/go-sdk v1.1.0
-	github.com/openziti/agora v0.1.3
+	github.com/openziti/agora v0.1.5
 	github.com/openziti/sdk-golang v1.5.4
 	github.com/openziti/zrok/v2 v2.0.0-rc7
 	github.com/pkg/errors v0.9.1

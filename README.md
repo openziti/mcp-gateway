@@ -308,6 +308,15 @@ go build ./cmd/mcp-bridge
 go build ./cmd/mcp-tools
 ```
 
+Each binary has a `version` subcommand that prints build metadata:
+
+```bash
+mcp-gateway version
+```
+
+Local builds report a developer build (e.g. `v0.1.x [developer build]`); release
+binaries are stamped with the version, commit, build date, branch, and builder.
+
 ## Documentation
 
 - [Example Configuration](etc/mcp-gateway.yml) - Fully documented configuration file

@@ -306,6 +306,8 @@ github.com/mgutz/ansi v0.0.0-20200706080929-d51e80ef957d h1:5PJl274Y63IEHC+7izoQ
 github.com/mgutz/ansi v0.0.0-20200706080929-d51e80ef957d/go.mod h1:01TrycV0kFyexm33Z7vhZRXopbI8J3TDReVlkTgMUxE=
 github.com/michaelquigley/df v0.3.14 h1:gS0TBmibd7vjIWbhZhjWwhwtkUfVQDljUksUKvIbAgM=
 github.com/michaelquigley/df v0.3.14/go.mod h1:Ym3uLqdbI6DxhqzLLtAzQ2ry7KfPKCjfXEgoOL23xfI=
+github.com/michaelquigley/df v1.0.1 h1:aiVln8wx/h8kiCTKiRXz/y2eEp9SiE+DquCGKVi1dTU=
+github.com/michaelquigley/df v1.0.1/go.mod h1:Ym3uLqdbI6DxhqzLLtAzQ2ry7KfPKCjfXEgoOL23xfI=
 github.com/michaelquigley/figlet v0.1.0 h1:GXhiuV2uGxAgZL0xz/9ftdobgt00bLvFDDc1R0A2OV8=
 github.com/michaelquigley/figlet v0.1.0/go.mod h1:o01j/eykadr5SKE51qSYuvQ1n9AftzHtGuaAEK8252A=
 github.com/michaelquigley/pfxlog v0.6.10 h1:IbC/H3MmSDcPlQHF1UZPQU13Dkrs0+ycWRyQd2ihnjw=
@@ -356,6 +358,8 @@ github.com/onsi/gomega v1.13.0 h1:7lLHu94wT9Ij0o6EWWclhu0aOh32VxhkwEJvzuWPeak=
 github.com/onsi/gomega v1.13.0/go.mod h1:lRk9szgn8TxENtWd0Tp4c3wjlRfMTMH27I+3Je41yGY=
 github.com/openziti/agora v0.1.3 h1:eAZ5hy5NsC5F2HuQmVCTTG1B490ZgVa2eFuLtzrILbo=
 github.com/openziti/agora v0.1.3/go.mod h1:Qjo3jXs5EGedPskPhZ6KUx9bXU0nld07mATxDWmJcgE=
+github.com/openziti/agora v0.1.5 h1:e6wMN/3qKeOZKFPZwlbaB7oM/aWLOTRZi110bABdt5s=
+github.com/openziti/agora v0.1.5/go.mod h1:8JIkbkgcn6Ff6JlbxzlSSiA8l17QQavS+xG5HQ98V78=
 github.com/openziti/channel/v4 v4.3.9 h1:uTiaFdS1XyFKv15g8W21Q9EjI3NE876lj5nvg+q6Zxk=
 github.com/openziti/channel/v4 v4.3.9/go.mod h1:pznrlRy3xAqBH1aj6EpjV7XfuoXT53nqdrw/pzXlgHg=
 github.com/openziti/edge-api v0.27.5 h1:PkwdTLE6beIngrurVGrjOU+8WuQi+W0ISQwPkjjLtpM=
