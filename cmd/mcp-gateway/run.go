@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"syscall"
 
 	"github.com/michaelquigley/df/dl"
 	mcpagora "github.com/openziti/mcp-gateway/agora"
@@ -54,7 +55,7 @@ func newRunCommand() *runCommand {
 func (cmd *runCommand) run(_ *cobra.Command, args []string) (retErr error) {
 	configPath := args[0]
 
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
 	// load config first to check for log file redirection
