@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v0.1.6
+
 FEATURE: Local stdio backends can enforce argument-aware filesystem reachability before dispatch. Per-tool path rules bind a named JSON argument to absolute roots, resolve symlinks, refuse traversal and malformed or unresolvable paths, and return a tool-level policy denial without invoking the backend.
 
 FEATURE: The embedding API can serve streamable HTTP on a caller-provided listener, enabling explicit loopback-only development and integration paths without an enrolled overlay environment. Standalone configuration remains fabric-only and retains its SSE surface.
