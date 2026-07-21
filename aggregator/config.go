@@ -3,6 +3,7 @@ package aggregator
 import (
 	"fmt"
 	"net/url"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -35,6 +36,22 @@ type BackendConfig struct {
 	Name      string
 	Transport TransportConfig
 	Tools     ToolFilterConfig
+	Policy    PolicyConfig
+}
+
+// PolicyConfig contains argument-aware rules enforced before a tool call is
+// forwarded to its backend. An empty policy preserves the gateway's existing
+// filter-only behavior.
+type PolicyConfig struct {
+	Paths []PathPolicyConfig
+}
+
+// PathPolicyConfig confines one tool argument to one of the configured roots.
+// tool names are backend-original names, before gateway namespacing.
+type PathPolicyConfig struct {
+	Tool     string
+	Argument string
+	Roots    []string
 }
 
 // TransportConfig specifies how to connect to a backend.
@@ -160,8 +177,58 @@ func (c *Config) Validate() error {
 				Message: fmt.Sprintf("invalid tool filter mode '%s', must be 'allow' or 'deny'", b.Tools.Mode),
 			}
 		}
+
+		if err := validatePolicy(b, i); err != nil {
+			return err
+		}
 	}
 
+	return nil
+}
+
+func validatePolicy(backend BackendConfig, index int) error {
+	if len(backend.Policy.Paths) == 0 {
+		return nil
+	}
+	if backend.Transport.Type != "stdio" {
+		return &ConfigError{
+			Field:   fmt.Sprintf("backends[%d].policy", index),
+			Message: "path policy requires a colocated stdio backend",
+		}
+	}
+
+	seenRules := map[string]bool{}
+	for ruleIndex, rule := range backend.Policy.Paths {
+		field := fmt.Sprintf("backends[%d].policy.paths[%d]", index, ruleIndex)
+		if rule.Tool == "" || strings.TrimSpace(rule.Tool) != rule.Tool {
+			return &ConfigError{Field: field + ".tool", Message: "tool is required and cannot have surrounding whitespace"}
+		}
+		if rule.Argument == "" || strings.TrimSpace(rule.Argument) != rule.Argument {
+			return &ConfigError{Field: field + ".argument", Message: "argument is required and cannot have surrounding whitespace"}
+		}
+		key := rule.Tool + "\x00" + rule.Argument
+		if seenRules[key] {
+			return &ConfigError{Field: field, Message: fmt.Sprintf("duplicate path rule for tool %q argument %q", rule.Tool, rule.Argument)}
+		}
+		seenRules[key] = true
+		if len(rule.Roots) == 0 {
+			return &ConfigError{Field: field + ".roots", Message: "at least one root is required"}
+		}
+		seenRoots := map[string]bool{}
+		for rootIndex, root := range rule.Roots {
+			rootField := fmt.Sprintf("%s.roots[%d]", field, rootIndex)
+			if !filepath.IsAbs(root) {
+				return &ConfigError{Field: rootField, Message: "root must be absolute"}
+			}
+			if filepath.Clean(root) != root {
+				return &ConfigError{Field: rootField, Message: "root must be clean"}
+			}
+			if seenRoots[root] {
+				return &ConfigError{Field: rootField, Message: fmt.Sprintf("duplicate root %q", root)}
+			}
+			seenRoots[root] = true
+		}
+	}
 	return nil
 }
 

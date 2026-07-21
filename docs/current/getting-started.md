@@ -284,6 +284,37 @@ This is useful when a server's tools are generally safe, but a few should be blo
 
 Filtering happens at startup. Filtered tools are never exposed to clients—they don't appear in tool listings and can't be called.
 
+### Argument-aware path policy
+
+Tool filtering decides which methods exist. A path policy additionally constrains what a permitted method may reach on every call, before the backend receives it:
+
+```yaml
+- id: workspace
+  transport:
+    type: stdio
+    command: mcp-filesystem
+    args: ["/home/me/project"]
+    working_dir: "/home/me/project"
+  tools:
+    mode: allow
+    list: ["*"]
+  policy:
+    paths:
+      - tool: read_file
+        argument: path
+        roots: ["/home/me/project"]
+      - tool: write_file
+        argument: path
+        roots: ["/home/me/project"]
+      - tool: list_directory
+        argument: path
+        roots: ["/home/me/project"]
+```
+
+Rules use each backend's original tool name, before namespacing. Roots must be clean absolute paths and must resolve to existing directories when the backend connects. A relative call argument resolves from the backend's `working_dir`; an existing target or a new target with an existing parent is symlink-resolved and must remain within one of the rule's roots. A missing, non-string, unresolvable, traversing, or symlink-escaping governed argument is returned to the caller as a policy error and is never forwarded.
+
+Path policy is intentionally limited to colocated `stdio` backends: only there does the gateway share the filesystem namespace needed to judge symlinks honestly. The policy applies only to the listed tool/argument pairs; use tool filtering or a higher-level closed profile when every advertised backend method must be classified. Keeping the backend's own root sandbox enabled remains useful defense in depth.
+
 ### A real-world configuration
 
 Once you're comfortable with the basics, here's a more realistic gateway config using third-party MCP servers (these require Node.js and npm):

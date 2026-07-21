@@ -57,6 +57,7 @@ type ClientSession struct {
 	config    *Config
 	namespace *aggregator.Namespace
 	agoraDial aggregator.AgoraDialClient
+	policies  map[string]*aggregator.CallPolicy
 	backends  map[string]*sessionBackend
 	ctx       context.Context
 	cancel    context.CancelFunc
@@ -72,11 +73,12 @@ type sessionBackend struct {
 	session *mcp.ClientSession
 	cmd     *exec.Cmd     // stdio backends only
 	access  *tools.Access // zrok backends only
+	policy  *aggregator.CallPolicy
 }
 
 // NewClientSession creates an isolated session with connections to all backends.
 // the session will be cleaned up when ctx is cancelled.
-func NewClientSession(ctx context.Context, config *Config, namespace *aggregator.Namespace, client *ClientContext, agoraDial aggregator.AgoraDialClient) (*ClientSession, error) {
+func NewClientSession(ctx context.Context, config *Config, namespace *aggregator.Namespace, client *ClientContext, agoraDial aggregator.AgoraDialClient, policies map[string]*aggregator.CallPolicy) (*ClientSession, error) {
 	sessionCtx, cancel := context.WithCancel(ctx)
 
 	cs := &ClientSession{
@@ -86,6 +88,7 @@ func NewClientSession(ctx context.Context, config *Config, namespace *aggregator
 		config:    config,
 		namespace: namespace,
 		agoraDial: agoraDial,
+		policies:  policies,
 		backends:  make(map[string]*sessionBackend),
 		ctx:       sessionCtx,
 		cancel:    cancel,
@@ -114,22 +117,33 @@ func NewClientSession(ctx context.Context, config *Config, namespace *aggregator
 
 // connectBackend establishes a connection to a single backend.
 func (cs *ClientSession) connectBackend(ctx context.Context, cfg aggregator.BackendConfig) (*sessionBackend, error) {
+	policy, ok := cs.policies[cfg.ID]
+	if !ok || policy == nil {
+		return nil, fmt.Errorf("startup-resolved call policy for backend %q is missing", cfg.ID)
+	}
+	var backend *sessionBackend
+	var err error
 	switch cfg.Transport.Type {
 	case "stdio":
-		return cs.connectStdioBackend(ctx, cfg)
+		backend, err = cs.connectStdioBackend(ctx, cfg, policy.WorkingDir())
 	case "zrok":
-		return cs.connectZrokBackend(ctx, cfg)
+		backend, err = cs.connectZrokBackend(ctx, cfg)
 	case "agora":
-		return cs.connectAgoraBackend(ctx, cfg)
+		backend, err = cs.connectAgoraBackend(ctx, cfg)
 	case "http", "https":
-		return cs.connectHTTPBackend(ctx, cfg)
+		backend, err = cs.connectHTTPBackend(ctx, cfg)
 	default:
 		return nil, fmt.Errorf("unsupported transport type '%s'", cfg.Transport.Type)
 	}
+	if err != nil {
+		return nil, err
+	}
+	backend.policy = policy
+	return backend, nil
 }
 
 // connectStdioBackend spawns a subprocess and connects via stdio.
-func (cs *ClientSession) connectStdioBackend(ctx context.Context, cfg aggregator.BackendConfig) (*sessionBackend, error) {
+func (cs *ClientSession) connectStdioBackend(ctx context.Context, cfg aggregator.BackendConfig, workingDir string) (*sessionBackend, error) {
 	mcpClient := mcp.NewClient(
 		&mcp.Implementation{
 			Name:    cs.config.Aggregator.Name,
@@ -140,7 +154,9 @@ func (cs *ClientSession) connectStdioBackend(ctx context.Context, cfg aggregator
 
 	// build command for stdio transport
 	cmd := exec.CommandContext(ctx, cfg.Transport.Command, cfg.Transport.Args...)
-	if cfg.Transport.WorkingDir != "" {
+	if workingDir != "" {
+		cmd.Dir = workingDir
+	} else if cfg.Transport.WorkingDir != "" {
 		cmd.Dir = cfg.Transport.WorkingDir
 	}
 
@@ -315,6 +331,23 @@ func (cs *ClientSession) CallTool(ctx context.Context, namespacedName string, ar
 	if !ok {
 		return nil, fmt.Errorf("backend '%s' not found for tool '%s'", tool.BackendID, namespacedName)
 	}
+	settled, err := backend.policy.Prepare(tool.OriginalName, args)
+	if err != nil {
+		duration := time.Since(start)
+		loggedArgs := settled
+		if loggedArgs == nil {
+			loggedArgs = args
+		}
+		dl.Log().
+			With("session_id", cs.id).
+			With("tool", namespacedName).
+			With("backend", tool.BackendID).
+			With("args", auditArgs(loggedArgs)).
+			With("duration_ms", duration.Milliseconds()).
+			With("error", err.Error()).
+			Info("tool call denied by policy")
+		return aggregator.PolicyDeniedResult(err), nil
+	}
 
 	// apply call timeout
 	callCtx, cancel := context.WithTimeout(ctx, cs.config.Aggregator.Connection.CallTimeout)
@@ -323,7 +356,7 @@ func (cs *ClientSession) CallTool(ctx context.Context, namespacedName string, ar
 	// call the tool using the original (non-namespaced) name
 	result, err := backend.session.CallTool(callCtx, &mcp.CallToolParams{
 		Name:      tool.OriginalName,
-		Arguments: args,
+		Arguments: settled,
 	})
 	duration := time.Since(start)
 
@@ -332,7 +365,7 @@ func (cs *ClientSession) CallTool(ctx context.Context, namespacedName string, ar
 			With("session_id", cs.id).
 			With("tool", namespacedName).
 			With("backend", tool.BackendID).
-			With("args", summarizeArgs(args)).
+			With("args", auditArgs(settled)).
 			With("duration_ms", duration.Milliseconds()).
 			With("error", err.Error()).
 			Info("tool call failed")
@@ -343,7 +376,7 @@ func (cs *ClientSession) CallTool(ctx context.Context, namespacedName string, ar
 		With("session_id", cs.id).
 		With("tool", namespacedName).
 		With("backend", tool.BackendID).
-		With("args", summarizeArgs(args)).
+		With("args", auditArgs(settled)).
 		With("duration_ms", duration.Milliseconds()).
 		With("result_type", getResultType(result)).
 		Info("tool call succeeded")
@@ -426,20 +459,20 @@ func (sb *sessionBackend) Close() error {
 	return errors.Join(errs...)
 }
 
-// summarizeArgs creates a loggable summary of tool arguments.
-// truncates long values to avoid log bloat.
-func summarizeArgs(args any) string {
+// auditArgs preserves complete structured arguments in the per-call record.
+func auditArgs(args any) any {
 	if args == nil {
-		return "{}"
+		return map[string]any{}
 	}
 	data, err := json.Marshal(args)
 	if err != nil {
-		return "<marshal error>"
+		return map[string]any{"audit_error": err.Error()}
 	}
-	if len(data) > 500 {
-		return string(data[:500]) + "..."
+	var decoded any
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return map[string]any{"audit_error": err.Error(), "raw": string(data)}
 	}
-	return string(data)
+	return decoded
 }
 
 // getResultType extracts a summary of the result for logging.

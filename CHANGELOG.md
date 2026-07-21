@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+FEATURE: Local stdio backends can enforce argument-aware filesystem reachability before dispatch. Per-tool path rules bind a named JSON argument to absolute roots, resolve symlinks, refuse traversal and malformed or unresolvable paths, and return a tool-level policy denial without invoking the backend.
+
+FEATURE: The embedding API can serve streamable HTTP on a caller-provided listener, enabling explicit loopback-only development and integration paths without an enrolled overlay environment. Standalone configuration remains fabric-only and retains its SSE surface.
+
+CHANGE: Gateway call logs now retain complete tool arguments as structured fields instead of truncating a JSON string at 500 bytes.
+
 FIX: `mcp-gateway run` now shuts down gracefully on `SIGTERM` in addition to `SIGINT`, matching `mcp-bridge` and `mcp-tools`. Process managers such as systemd and Kubernetes send `SIGTERM`, which previously hard-killed the gateway and leaked its Agora serve tunnel and zrok share; cleanup now runs on either signal.
 
 CHANGE: Build-metadata versioning now uses the `github.com/michaelquigley/push` framework. Each binary (`mcp-gateway`, `mcp-bridge`, `mcp-tools`, `mcp-filesystem`) gains a `version` subcommand that prints the stamped version, commit, build date, branch, and builder. This replaces the previous `--version` flag.
@@ -20,4 +26,4 @@ FIX: Fix cleanup leaks on runtime failures so `mcp-tools`, `mcp-bridge`, and `mc
 
 ## v0.1.1
 
-Initial public release.
+FEATURE: Initial public release.

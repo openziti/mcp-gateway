@@ -145,6 +145,21 @@ backends:
         - "search_files"
         # write operations not exposed in this example
 
+    # argument-aware path policy (optional; local stdio backends only)
+    # each rule uses the backend's original tool name and refuses the call
+    # before dispatch when the named argument resolves outside every root.
+    # roots must be clean absolute paths naming existing directories.
+    #policy:
+    #  paths:
+    #    - tool: "read_file"
+    #      argument: "path"
+    #      roots:
+    #        - "/home/user/documents"
+    #    - tool: "list_directory"
+    #      argument: "path"
+    #      roots:
+    #        - "/home/user/documents"
+
   # ------------------------------------------------------------------------------
   # example: local stdio backend (github server)
   # ------------------------------------------------------------------------------

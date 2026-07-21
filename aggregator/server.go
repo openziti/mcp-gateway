@@ -2,7 +2,6 @@ package aggregator
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 
 	"github.com/michaelquigley/df/dl"
@@ -71,26 +70,12 @@ func (s *Server) createToolHandler(namespacedName string) mcp.ToolHandler {
 				Err:       fmt.Errorf("backend not found"),
 			}
 		}
-
-		// parse arguments from raw JSON
-		var args map[string]any
-		if len(req.Params.Arguments) > 0 {
-			if err := json.Unmarshal(req.Params.Arguments, &args); err != nil {
-				return &mcp.CallToolResult{
-					Content: []mcp.Content{
-						&mcp.TextContent{Text: fmt.Sprintf("failed to parse arguments: %v", err)},
-					},
-					IsError: true,
-				}, nil
-			}
-		}
-
 		// apply call timeout from config
 		ctx, cancel := context.WithTimeout(ctx, s.config.Aggregator.Connection.CallTimeout)
 		defer cancel()
 
 		// forward the call to the backend with original tool name
-		result, err := backend.CallTool(ctx, nsTool.OriginalName, args)
+		result, err := backend.CallTool(ctx, nsTool.OriginalName, req.Params.Arguments)
 		if err != nil {
 			dl.Log().With("tool", namespacedName).With("backend", nsTool.BackendID).With("error", err).Error("tool call failed")
 			return nil, &BackendError{

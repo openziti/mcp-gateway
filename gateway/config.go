@@ -83,6 +83,13 @@ func LoadConfig(path string) (*Config, error) {
 
 // Validate checks the configuration for errors.
 func (c *Config) Validate() error {
+	return c.validate(false)
+}
+
+func (c *Config) validate(hasLocalListener bool) error {
+	if c == nil {
+		return &ConfigError{Field: "config", Message: "configuration is required"}
+	}
 	if len(c.Backends) == 0 {
 		return &ConfigError{Field: "backends", Message: "at least one backend is required"}
 	}
@@ -91,7 +98,7 @@ func (c *Config) Validate() error {
 		return &ConfigError{Field: "share_token", Message: "share_token requires zrok.share.enabled"}
 	}
 
-	if !c.ZrokShareEnabled() && !c.AgoraServeEnabled() {
+	if !c.ZrokShareEnabled() && !c.AgoraServeEnabled() && !hasLocalListener {
 		return &ConfigError{Field: "network", Message: "at least one of zrok.share.enabled or agora.serve.enabled must be true"}
 	}
 
