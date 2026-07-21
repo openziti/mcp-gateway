@@ -22,6 +22,7 @@ type Backend struct {
 	session *mcp.ClientSession
 	tools   []*mcp.Tool
 	access  *tools.Access // non-nil for zrok backends
+	policy  *CallPolicy
 	mu      sync.RWMutex
 }
 
@@ -58,6 +59,7 @@ func (m *BackendManager) Connect(ctx context.Context) error {
 	for _, bcfg := range m.config.Backends {
 		backend, err := m.connectBackend(ctx, bcfg)
 		if err != nil {
+			_ = m.Close()
 			return &BackendError{
 				BackendID: bcfg.ID,
 				Op:        "connect",
@@ -74,22 +76,39 @@ func (m *BackendManager) Connect(ctx context.Context) error {
 
 // connectBackend establishes a connection to a single backend.
 func (m *BackendManager) connectBackend(ctx context.Context, cfg BackendConfig) (*Backend, error) {
+	policy, err := NewCallPolicy(cfg.Policy, cfg.Transport.WorkingDir)
+	if err != nil {
+		return nil, err
+	}
+	var backend *Backend
 	switch cfg.Transport.Type {
 	case "stdio":
-		return m.connectStdioBackend(ctx, cfg)
+		backend, err = m.connectStdioBackend(ctx, cfg, policy.WorkingDir())
 	case "zrok":
-		return m.connectZrokBackend(ctx, cfg)
+		backend, err = m.connectZrokBackend(ctx, cfg)
 	case "agora":
-		return m.connectAgoraBackend(ctx, cfg)
+		backend, err = m.connectAgoraBackend(ctx, cfg)
 	case "http", "https":
-		return m.connectHTTPBackend(ctx, cfg)
+		backend, err = m.connectHTTPBackend(ctx, cfg)
 	default:
 		return nil, fmt.Errorf("unsupported transport type '%s'", cfg.Transport.Type)
 	}
+	if err != nil {
+		return nil, err
+	}
+	if err := policy.ValidateTools(backend.tools); err != nil {
+		_ = backend.session.Close()
+		if backend.access != nil {
+			_ = backend.access.Close()
+		}
+		return nil, err
+	}
+	backend.policy = policy
+	return backend, nil
 }
 
 // connectStdioBackend establishes a connection to a stdio backend.
-func (m *BackendManager) connectStdioBackend(ctx context.Context, cfg BackendConfig) (*Backend, error) {
+func (m *BackendManager) connectStdioBackend(ctx context.Context, cfg BackendConfig, workingDir string) (*Backend, error) {
 	// create client for this backend
 	mcpClient := mcp.NewClient(
 		&mcp.Implementation{
@@ -101,7 +120,9 @@ func (m *BackendManager) connectStdioBackend(ctx context.Context, cfg BackendCon
 
 	// build command for stdio transport
 	cmd := exec.CommandContext(ctx, cfg.Transport.Command, cfg.Transport.Args...)
-	if cfg.Transport.WorkingDir != "" {
+	if workingDir != "" {
+		cmd.Dir = workingDir
+	} else if cfg.Transport.WorkingDir != "" {
 		cmd.Dir = cfg.Transport.WorkingDir
 	}
 
@@ -351,10 +372,22 @@ func (b *Backend) Tools() []*mcp.Tool {
 	return b.tools
 }
 
+// Policy returns the immutable policy resolved for this startup connection.
+func (b *Backend) Policy() *CallPolicy { return b.policy }
+
 // CallTool invokes a tool on this backend.
-func (b *Backend) CallTool(ctx context.Context, name string, args map[string]any) (*mcp.CallToolResult, error) {
+func (b *Backend) CallTool(ctx context.Context, name string, args any) (*mcp.CallToolResult, error) {
+	settled, err := b.policy.Prepare(name, args)
+	if err != nil {
+		loggedArgs := settled
+		if loggedArgs == nil {
+			loggedArgs = args
+		}
+		dl.Log().With("backend", b.id).With("tool", name).With("args", loggedArgs).With("error", err).Info("tool call denied by policy")
+		return PolicyDeniedResult(err), nil
+	}
 	return b.session.CallTool(ctx, &mcp.CallToolParams{
 		Name:      name,
-		Arguments: args,
+		Arguments: settled,
 	})
 }

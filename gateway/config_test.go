@@ -26,6 +26,14 @@ func TestValidateRejectsNoEnabledListener(t *testing.T) {
 	}
 }
 
+func TestValidateAllowsCallerProvidedListener(t *testing.T) {
+	cfg := validTestConfig()
+	cfg.Zrok.Share.Enabled = false
+	if err := cfg.validate(true); err != nil {
+		t.Fatalf("caller-provided listener rejected: %v", err)
+	}
+}
+
 func TestValidateAllowsAgoraServeWithoutZrok(t *testing.T) {
 	cfg := validTestConfig()
 	cfg.Zrok.Share.Enabled = false
