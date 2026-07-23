@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## v0.1.7
+
+FEATURE: stdio backend transports accept an `env_policy`: `additive` (the default, and the historical behavior) appends configured entries to the gateway's own environment; `closed` starts the backend with exactly the configured entries and nothing inherited, so an embedding caller's spawned process tree cannot recover host secrets (for example via `/proc/<pid>/environ`). Unknown values are rejected at config validation. One shared builder now owns environment construction for both the aggregator and per-session stdio spawn paths.
+
 ## v0.1.6
 
 FEATURE: Local stdio backends can enforce argument-aware filesystem reachability before dispatch. Per-tool path rules bind a named JSON argument to absolute roots, resolve symlinks, refuse traversal and malformed or unresolvable paths, and return a tool-level policy denial without invoking the backend.

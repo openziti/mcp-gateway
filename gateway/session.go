@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"os"
 	"os/exec"
 	"strings"
 	"sync"
@@ -160,11 +159,8 @@ func (cs *ClientSession) connectStdioBackend(ctx context.Context, cfg aggregator
 		cmd.Dir = cfg.Transport.WorkingDir
 	}
 
-	// set environment variables
-	cmd.Env = os.Environ()
-	for k, v := range cfg.Transport.Env {
-		cmd.Env = append(cmd.Env, k+"="+v)
-	}
+	// set environment variables per the transport's env policy
+	cmd.Env = aggregator.StdioEnvironment(cfg.Transport)
 
 	// create transport and connect
 	transport := &mcp.CommandTransport{Command: cmd}
