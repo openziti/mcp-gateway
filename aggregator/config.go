@@ -61,6 +61,7 @@ type TransportConfig struct {
 	Command    string
 	Args       []string
 	Env        map[string]string
+	EnvPolicy  string // "additive" (default) inherits the gateway environment; "closed" starts from exactly Env
 	WorkingDir string
 	// zrok transport fields
 	ShareToken string
@@ -148,6 +149,9 @@ func (c *Config) Validate() error {
 					Field:   fmt.Sprintf("backends[%d].transport.command", i),
 					Message: "command is required for stdio transport",
 				}
+			}
+			if err := validateEnvPolicy(b.Transport, i); err != nil {
+				return err
 			}
 		case "zrok":
 			if b.Transport.ShareToken == "" {
