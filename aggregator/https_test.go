@@ -233,6 +233,108 @@ func TestBuildHTTPClient_RejectsTLSForPlainHTTPEndpoint(t *testing.T) {
 	}
 }
 
+func TestBuildHTTPClient_DefaultsToClosedNetworkPosture(t *testing.T) {
+	client, err := BuildHTTPClient(TransportConfig{
+		Type:          "http",
+		Endpoint:      "http://mcp.example.com/sse",
+		AllowInsecure: true,
+	})
+	if err != nil {
+		t.Fatalf("expected success, got %v", err)
+	}
+
+	transport, ok := client.Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("expected *http.Transport, got %T", client.Transport)
+	}
+	if transport.Proxy != nil {
+		t.Fatal("expected environment proxy lookup to be disabled")
+	}
+	if client.CheckRedirect == nil {
+		t.Fatal("expected redirects to be refused")
+	}
+	if err := client.CheckRedirect(&http.Request{}, nil); err == nil {
+		t.Fatal("expected redirect refusal error")
+	}
+}
+
+func TestBuildHTTPClient_AllowsExplicitNetworkOptIns(t *testing.T) {
+	client, err := BuildHTTPClient(TransportConfig{
+		Type:                  "http",
+		Endpoint:              "http://mcp.example.com/sse",
+		AllowInsecure:         true,
+		AllowEnvironmentProxy: true,
+		AllowRedirects:        true,
+	})
+	if err != nil {
+		t.Fatalf("expected success, got %v", err)
+	}
+
+	transport, ok := client.Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("expected *http.Transport, got %T", client.Transport)
+	}
+	if transport.Proxy == nil {
+		t.Fatal("expected environment proxy lookup to be enabled")
+	}
+	if client.CheckRedirect == nil {
+		t.Fatal("expected redirect policy")
+	}
+	redirect, err := http.NewRequest(http.MethodGet, "http://redirected.example.com/sse", nil)
+	if err != nil {
+		t.Fatalf("NewRequest returned error: %v", err)
+	}
+	if err := client.CheckRedirect(redirect, []*http.Request{{}}); err != nil {
+		t.Fatalf("expected explicitly enabled HTTP redirect, got %v", err)
+	}
+}
+
+func TestBuildHTTPClient_RejectsRedirectDowngrade(t *testing.T) {
+	client, err := BuildHTTPClient(TransportConfig{
+		Type:           "https",
+		Endpoint:       "https://mcp.example.com/sse",
+		AllowRedirects: true,
+	})
+	if err != nil {
+		t.Fatalf("expected success, got %v", err)
+	}
+
+	httpsRedirect, err := http.NewRequest(http.MethodGet, "https://redirected.example.com/sse", nil)
+	if err != nil {
+		t.Fatalf("NewRequest returned error: %v", err)
+	}
+	if err := client.CheckRedirect(httpsRedirect, []*http.Request{{}}); err != nil {
+		t.Fatalf("expected HTTPS redirect, got %v", err)
+	}
+
+	httpRedirect, err := http.NewRequest(http.MethodGet, "http://redirected.example.com/sse", nil)
+	if err != nil {
+		t.Fatalf("NewRequest returned error: %v", err)
+	}
+	if err := client.CheckRedirect(httpRedirect, []*http.Request{{}}); err == nil {
+		t.Fatal("expected plaintext redirect to be refused")
+	}
+}
+
+func TestBuildHTTPClient_RedirectsPreserveHopLimit(t *testing.T) {
+	client, err := BuildHTTPClient(TransportConfig{
+		Type:           "https",
+		Endpoint:       "https://mcp.example.com/sse",
+		AllowRedirects: true,
+	})
+	if err != nil {
+		t.Fatalf("expected success, got %v", err)
+	}
+
+	redirect, err := http.NewRequest(http.MethodGet, "https://redirected.example.com/sse", nil)
+	if err != nil {
+		t.Fatalf("NewRequest returned error: %v", err)
+	}
+	if err := client.CheckRedirect(redirect, make([]*http.Request, 10)); err == nil {
+		t.Fatal("expected ten-redirect limit")
+	}
+}
+
 func newTestCert(t *testing.T, commonName string) ([]byte, *x509.Certificate) {
 	t.Helper()
 

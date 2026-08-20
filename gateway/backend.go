@@ -132,7 +132,7 @@ func (b *Backend) Start(ctx context.Context) (err error) {
 			}
 		} else {
 			// standalone mode: create new share
-			share, err = NewShare()
+			share, err = NewShare(b.config.ZrokShareAccessGrants())
 			if err != nil {
 				return fmt.Errorf("failed to create share: %w", err)
 			}

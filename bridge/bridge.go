@@ -89,7 +89,7 @@ func (b *Bridge) Start(ctx context.Context) (err error) {
 		if b.cfg.ShareToken != "" {
 			share, err = gateway.NewShareFromToken(b.cfg.ShareToken)
 		} else {
-			share, err = gateway.NewShare()
+			share, err = gateway.NewShare(b.cfg.ZrokShareAccessGrants())
 		}
 		if err != nil {
 			return fmt.Errorf("failed to create share: %w", err)

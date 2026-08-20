@@ -16,6 +16,62 @@ func TestDefaultConfigEnablesZrokShare(t *testing.T) {
 	}
 }
 
+func TestZrokShareAccessGrants(t *testing.T) {
+	if got := (*Config)(nil).ZrokShareAccessGrants(); len(got) != 0 {
+		t.Fatalf("nil config grants = %#v, want owner-only", got)
+	}
+
+	cfg := DefaultConfig()
+	cfg.Zrok.Share.AccessGrants = []string{"other@example.com"}
+	got := cfg.ZrokShareAccessGrants()
+	if len(got) != 1 || got[0] != "other@example.com" {
+		t.Fatalf("grants = %#v, want configured account", got)
+	}
+}
+
+func TestValidateAcceptsAccessGrantsForNewZrokShare(t *testing.T) {
+	cfg := validTestConfig()
+	cfg.Zrok.Share.AccessGrants = []string{"other@example.com"}
+
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("expected success, got %v", err)
+	}
+}
+
+func TestValidateRejectsAccessGrantsWithShareToken(t *testing.T) {
+	cfg := validTestConfig()
+	cfg.ShareToken = "managed-share"
+	cfg.Zrok.Share.AccessGrants = []string{"other@example.com"}
+
+	err := cfg.Validate()
+	configErr, ok := err.(*ConfigError)
+	if !ok {
+		t.Fatalf("expected ConfigError, got %T (%v)", err, err)
+	}
+	if configErr.Field != "zrok.share.access_grants" {
+		t.Fatalf("field = %q, want zrok.share.access_grants", configErr.Field)
+	}
+}
+
+func TestValidateRejectsAccessGrantsWhenZrokDisabled(t *testing.T) {
+	cfg := validTestConfig()
+	cfg.Zrok.Share.Enabled = false
+	cfg.Zrok.Share.AccessGrants = []string{"other@example.com"}
+	cfg.Agora = &mcpagora.Config{
+		Enabled: true,
+		Serve:   &mcpagora.ServeConfig{Enabled: true},
+	}
+
+	err := cfg.Validate()
+	configErr, ok := err.(*ConfigError)
+	if !ok {
+		t.Fatalf("expected ConfigError, got %T (%v)", err, err)
+	}
+	if configErr.Field != "zrok.share.access_grants" {
+		t.Fatalf("field = %q, want zrok.share.access_grants", configErr.Field)
+	}
+}
+
 func TestValidateRejectsNoEnabledListener(t *testing.T) {
 	cfg := validTestConfig()
 	cfg.Zrok.Share.Enabled = false

@@ -389,6 +389,12 @@ mcp-bridge mcp-filesystem /data
 # outputs: {"share_token":"remote-token"}
 ```
 
+The ephemeral share is closed and owner-only. If the gateway connects from another zrok account, grant that account when starting the bridge; repeat the flag for multiple accounts:
+
+```bash
+mcp-bridge --access-grant gateway@example.com mcp-filesystem /data
+```
+
 ### Add as a gateway backend
 
 In your gateway config, add a backend with `type: zrok` and the bridge's share token:

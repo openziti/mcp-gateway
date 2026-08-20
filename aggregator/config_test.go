@@ -153,6 +153,65 @@ func TestValidateRejectsMalformedHTTPTransportEndpoint(t *testing.T) {
 	}
 }
 
+func TestValidateRejectsHTTPBehaviorOptInsOnNonHTTPTransports(t *testing.T) {
+	tests := []struct {
+		name      string
+		transport TransportConfig
+		field     string
+	}{
+		{
+			name: "stdio environment proxy",
+			transport: TransportConfig{
+				Type:                  "stdio",
+				Command:               "backend",
+				AllowEnvironmentProxy: true,
+			},
+			field: "backends[0].transport.allow_environment_proxy",
+		},
+		{
+			name: "stdio redirects",
+			transport: TransportConfig{
+				Type:           "stdio",
+				Command:        "backend",
+				AllowRedirects: true,
+			},
+			field: "backends[0].transport.allow_redirects",
+		},
+		{
+			name: "zrok environment proxy",
+			transport: TransportConfig{
+				Type:                  "zrok",
+				ShareToken:            "share-token",
+				AllowEnvironmentProxy: true,
+			},
+			field: "backends[0].transport.allow_environment_proxy",
+		},
+		{
+			name: "zrok redirects",
+			transport: TransportConfig{
+				Type:           "zrok",
+				ShareToken:     "share-token",
+				AllowRedirects: true,
+			},
+			field: "backends[0].transport.allow_redirects",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &Config{Backends: []BackendConfig{{ID: "remote", Transport: tt.transport}}}
+			err := cfg.Validate()
+			configErr, ok := err.(*ConfigError)
+			if !ok {
+				t.Fatalf("expected ConfigError, got %T (%v)", err, err)
+			}
+			if configErr.Field != tt.field {
+				t.Fatalf("field = %q, want %q", configErr.Field, tt.field)
+			}
+		})
+	}
+}
+
 func TestValidateAcceptsAgoraTransport(t *testing.T) {
 	cfg := &Config{
 		Backends: []BackendConfig{{

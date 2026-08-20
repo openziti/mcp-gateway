@@ -19,6 +19,7 @@ var (
 	env                  []string
 	workingDir           string
 	shareToken           string
+	accessGrants         []string
 	network              string
 	agoraTunnel          string
 	agoraIntegrationFile string
@@ -37,6 +38,7 @@ func init() {
 	rootCmd.Flags().StringArrayVar(&env, "env", nil, "environment variables in KEY=VALUE format (can be specified multiple times)")
 	rootCmd.Flags().StringVar(&workingDir, "working-dir", "", "working directory for the command")
 	rootCmd.Flags().StringVar(&shareToken, "share-token", "", "pre-created zrok share token (managed mode)")
+	rootCmd.Flags().StringArrayVar(&accessGrants, "access-grant", nil, "zrok account email granted access (can be specified multiple times)")
 	rootCmd.Flags().StringVar(&network, "network", "", "network shortcut: zrok or agora")
 	rootCmd.Flags().StringVar(&agoraTunnel, "agora-tunnel", "", "agora tunnel name to serve (bind if it exists, else create+delete; default: instance name)")
 	rootCmd.Flags().StringVar(&agoraIntegrationFile, "agora-integration-file", "", "path to Agora integration file (overrides config)")
@@ -133,6 +135,16 @@ func applyOverrides(cfg *bridge.Config) error {
 			cfg.Zrok.Share = &bridge.ZrokShareConfig{}
 		}
 		cfg.Zrok.Share.Enabled = false
+	}
+
+	if len(accessGrants) > 0 {
+		if cfg.Zrok == nil {
+			cfg.Zrok = &bridge.ZrokConfig{}
+		}
+		if cfg.Zrok.Share == nil {
+			cfg.Zrok.Share = &bridge.ZrokShareConfig{Enabled: true}
+		}
+		cfg.Zrok.Share.AccessGrants = append([]string(nil), accessGrants...)
 	}
 
 	if tunnel := strings.TrimSpace(agoraTunnel); tunnel != "" {
