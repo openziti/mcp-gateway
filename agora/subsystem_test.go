@@ -37,6 +37,7 @@ type fakeOps struct {
 	// behavior toggles
 	listenErr      error
 	listenErrAfter int // apply listenErr once listen calls exceed this count
+	listenHook     func(int)
 	createErr      error
 	createConflict bool // Create simulates losing a create race
 	attachErr      error
@@ -52,6 +53,7 @@ type fakeOps struct {
 	listeners    []*fakeListener
 	sequence     []string
 	listenCalls  int
+	deleteCtxErr error
 	closed       int
 }
 
@@ -99,6 +101,9 @@ func (f *fakeOps) GetTunnel(_ context.Context, _ any, name string) (*tunnel.Tunn
 func (f *fakeOps) Listen(_ context.Context, _ any, name string) (net.Listener, error) {
 	f.listenCalls++
 	f.sequence = append(f.sequence, "listen:"+name)
+	if f.listenHook != nil {
+		f.listenHook(f.listenCalls)
+	}
 	if f.listenErr != nil && f.listenCalls > f.listenErrAfter {
 		return nil, f.listenErr
 	}
@@ -110,7 +115,11 @@ func (f *fakeOps) Listen(_ context.Context, _ any, name string) (net.Listener, e
 	return l, nil
 }
 
-func (f *fakeOps) Delete(_ context.Context, _ any, t *tunnel.Tunnel) error {
+func (f *fakeOps) Delete(ctx context.Context, _ any, t *tunnel.Tunnel) error {
+	f.deleteCtxErr = ctx.Err()
+	if f.deleteCtxErr != nil {
+		return f.deleteCtxErr
+	}
 	f.deleted = append(f.deleted, t.Name)
 	f.sequence = append(f.sequence, "delete")
 	delete(f.tunnels, t.Name)
@@ -160,10 +169,9 @@ func (f *fakeOps) Close(context.Context, any) error {
 func TestNewSubsystemUsesRuntimelessAgent(t *testing.T) {
 	ops := newFakeOps()
 	sub, err := newSubsystemWithOps(SubsystemOptions{
-		Config:        baseTestConfig(),
-		Defaults:      gatewayDefaults(),
-		Capabilities:  []string{"mcp-tools"},
-		PublishWanted: true,
+		Config:       baseTestConfig(),
+		Defaults:     gatewayDefaults(),
+		Capabilities: []string{"mcp-tools"},
 	}, ops)
 	if err != nil {
 		t.Fatalf("newSubsystemWithOps returned error: %v", err)
@@ -177,11 +185,15 @@ func TestNewSubsystemUsesRuntimelessAgent(t *testing.T) {
 }
 
 func TestSubsystemPublishesHTTPModeWithDialKeyName(t *testing.T) {
+	cfg := baseTestConfig()
+	cfg.Serve = &ServeConfig{Enabled: true}
+
 	ops := newFakeOps()
 	sub, err := newSubsystemWithOps(SubsystemOptions{
-		Config:        baseTestConfig(),
+		Config:        cfg,
 		Defaults:      gatewayDefaults(),
 		Capabilities:  []string{"mcp-tools"},
+		ServeWanted:   true,
 		PublishWanted: true,
 	}, ops)
 	if err != nil {
@@ -215,7 +227,8 @@ func TestSubsystemPublishNameFollowsServeTunnel(t *testing.T) {
 		Config:        cfg,
 		Defaults:      gatewayDefaults(),
 		Capabilities:  []string{"mcp-tools"},
-		PublishWanted: true, // serve not wanted in this process; name still resolves
+		ServeWanted:   true,
+		PublishWanted: true,
 	}, ops)
 	if err != nil {
 		t.Fatalf("newSubsystemWithOps returned error: %v", err)
@@ -257,16 +270,56 @@ func TestSubsystemDefaultPublishWithoutWorkgroupsDowngradesToServeOnly(t *testin
 	}
 }
 
-func TestSubsystemExplicitPublishWithoutWorkgroupsFails(t *testing.T) {
+func TestSubsystemDefaultPublishWithoutServeIsSkipped(t *testing.T) {
+	cfg := baseTestConfig()
+
+	ops := newFakeOps()
+	sub, err := newSubsystemWithOps(SubsystemOptions{
+		Config:        cfg,
+		Defaults:      gatewayDefaults(),
+		Capabilities:  []string{"mcp-tools"},
+		PublishWanted: true,
+	}, ops)
+	if err != nil {
+		t.Fatalf("newSubsystemWithOps returned error: %v", err)
+	}
+	if err := sub.StartPublishing(context.Background()); err != nil {
+		t.Fatalf("StartPublishing returned error: %v", err)
+	}
+	if len(ops.publishSpecs) != 0 {
+		t.Fatalf("default publication must be skipped without serving: %#v", ops.publishSpecs)
+	}
+}
+
+func TestSubsystemExplicitPublishWithoutServeFails(t *testing.T) {
 	publish := true
 	cfg := baseTestConfig()
-	cfg.Advertisement = &AdvertisementConfig{Publish: &publish}
+	cfg.Advertisement.Publish = &publish
 
 	ops := newFakeOps()
 	_, err := newSubsystemWithOps(SubsystemOptions{
 		Config:        cfg,
 		Defaults:      gatewayDefaults(),
 		Capabilities:  []string{"mcp-tools"},
+		PublishWanted: true,
+	}, ops)
+	if err == nil || !strings.Contains(err.Error(), "requires Agora serving") {
+		t.Fatalf("explicit publish without serve must fail, got %v", err)
+	}
+}
+
+func TestSubsystemExplicitPublishWithoutWorkgroupsFails(t *testing.T) {
+	publish := true
+	cfg := baseTestConfig()
+	cfg.Advertisement = &AdvertisementConfig{Publish: &publish}
+	cfg.Serve = &ServeConfig{Enabled: true}
+
+	ops := newFakeOps()
+	_, err := newSubsystemWithOps(SubsystemOptions{
+		Config:        cfg,
+		Defaults:      gatewayDefaults(),
+		Capabilities:  []string{"mcp-tools"},
+		ServeWanted:   true,
 		PublishWanted: true,
 	}, ops)
 	if err == nil || !strings.Contains(err.Error(), "workgroup_ids") {
@@ -282,10 +335,9 @@ func TestSubsystemAllowsUnsetAPIEndpoint(t *testing.T) {
 
 	ops := newFakeOps()
 	sub, err := newSubsystemWithOps(SubsystemOptions{
-		Config:        cfg,
-		Defaults:      gatewayDefaults(),
-		Capabilities:  []string{"mcp-tools"},
-		PublishWanted: true,
+		Config:       cfg,
+		Defaults:     gatewayDefaults(),
+		Capabilities: []string{"mcp-tools"},
 	}, ops)
 	if err != nil {
 		t.Fatalf("newSubsystemWithOps returned error: %v", err)
@@ -299,10 +351,9 @@ func TestSubsystemEndpointMismatchFails(t *testing.T) {
 	ops := newFakeOps()
 	ops.rootEndpoint = "http://other.example"
 	_, err := newSubsystemWithOps(SubsystemOptions{
-		Config:        baseTestConfig(),
-		Defaults:      gatewayDefaults(),
-		Capabilities:  []string{"mcp-tools"},
-		PublishWanted: true,
+		Config:       baseTestConfig(),
+		Defaults:     gatewayDefaults(),
+		Capabilities: []string{"mcp-tools"},
 	}, ops)
 	if err == nil {
 		t.Fatal("expected endpoint mismatch error")
@@ -310,10 +361,14 @@ func TestSubsystemEndpointMismatchFails(t *testing.T) {
 }
 
 func TestSubsystemRequiresCapabilitiesWhenPublishing(t *testing.T) {
+	cfg := baseTestConfig()
+	cfg.Serve = &ServeConfig{Enabled: true}
+
 	ops := newFakeOps()
 	_, err := newSubsystemWithOps(SubsystemOptions{
-		Config:        baseTestConfig(),
+		Config:        cfg,
 		Defaults:      gatewayDefaults(),
+		ServeWanted:   true,
 		PublishWanted: true,
 	}, ops)
 	if err == nil || !strings.Contains(err.Error(), "derived capabilities are required") {

@@ -150,6 +150,14 @@ func newSubsystemWithOps(opts SubsystemOptions, ops agoraOps) (*Subsystem, error
 	serveWanted := opts.ServeWanted && ServeEnabled(cfg)
 	publishWanted := opts.PublishWanted && AdvertisementPublish(cfg)
 
+	if publishWanted && !serveWanted {
+		if publishExplicit(cfg) {
+			return nil, fmt.Errorf("agora.advertisement.publish requires Agora serving")
+		}
+		publishWanted = false
+		dl.Log().Info("skipping agora advertisement publish: Agora serving is disabled")
+	}
+
 	// publishing requires workgroup scope IDs (controller-enforced). When
 	// publishing is on by *default* and no workgroup IDs are configured,
 	// downgrade to serve-only with a notice — an enrolled account without an

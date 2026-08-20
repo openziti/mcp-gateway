@@ -213,18 +213,20 @@ does not require advertisement IDs.
 
 ## Advertisement
 
-When `agora.enabled: true`, advertisement publishing defaults to enabled.
-Set `advertisement.publish: false` to use Agora serving or backend connects
-without publishing a catalog card.
+When both `agora.enabled: true` and `agora.serve.enabled: true`, advertisement
+publishing defaults to enabled. Set `advertisement.publish: false` to use Agora
+serving without publishing a catalog card. A gateway that enables Agora only
+to connect to backends does not publish.
 
 Publishing requires workgroup scope IDs (controller-enforced). The
 `advertisement.publish` setting is a tri-state:
 
-- **Unset (default-on):** publishes when workgroup IDs are available; when none
-  are configured, the process logs a notice and runs serve-only instead of
-  failing. This lets an enrolled account run `--network=agora` with no
-  integration file.
-- **Explicit `true`:** missing workgroup IDs are a hard error.
+- **Unset (default-on while serving):** publishes when serving is enabled and
+  workgroup IDs are available. When serving is disabled, or when no workgroup
+  IDs are configured, the process logs a notice and skips publication instead
+  of failing.
+- **Explicit `true`:** serving must be enabled and missing workgroup IDs are a
+  hard error.
 - **Explicit `false`:** never publishes.
 
 When publishing is enabled:
