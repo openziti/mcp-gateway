@@ -108,6 +108,10 @@ func (c *Config) validate(hasLocalListener bool) error {
 		return &ConfigError{Field: "share_token", Message: "share_token requires zrok.share.enabled"}
 	}
 
+	if c.agoraPublishExplicitlyEnabled() && !c.AgoraServeEnabled() {
+		return &ConfigError{Field: "agora.advertisement.publish", Message: "explicit publish=true requires agora.serve.enabled"}
+	}
+
 	if !c.ZrokShareEnabled() && !c.AgoraServeEnabled() && !hasLocalListener {
 		return &ConfigError{Field: "network", Message: "at least one of zrok.share.enabled or agora.serve.enabled must be true"}
 	}
@@ -157,7 +161,24 @@ func (c *Config) AgoraServeEnabled() bool {
 
 // AgoraPublishEnabled reports whether the gateway should publish to the Agora catalog.
 func (c *Config) AgoraPublishEnabled() bool {
-	return c != nil && c.Agora != nil && c.Agora.Enabled && agora.AdvertisementPublish(c.Agora)
+	return c.AgoraServeEnabled() && agora.AdvertisementPublish(c.Agora)
+}
+
+// agoraPublishDefaultedOffWithoutServe reports the non-error case where Agora
+// is enabled but advertisement publishing was left unset and serving is off.
+// the gateway may still use Agora to dial backends; it just has no local Agora
+// endpoint that can be advertised honestly.
+func (c *Config) agoraPublishDefaultedOffWithoutServe() bool {
+	return c != nil && c.Agora != nil && c.Agora.Enabled &&
+		!c.AgoraServeEnabled() &&
+		(c.Agora.Advertisement == nil || c.Agora.Advertisement.Publish == nil)
+}
+
+func (c *Config) agoraPublishExplicitlyEnabled() bool {
+	return c != nil && c.Agora != nil &&
+		c.Agora.Advertisement != nil &&
+		c.Agora.Advertisement.Publish != nil &&
+		*c.Agora.Advertisement.Publish
 }
 
 func (c *Config) hasAgoraBackends() bool {

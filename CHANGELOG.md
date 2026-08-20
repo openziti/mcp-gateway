@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+FIX: Agora serve initialization now deletes a newly created tunnel with a fresh bounded cleanup context when the subsequent listen fails, preventing request cancellation from leaving an orphaned tunnel behind.
+
+FIX: `mcp-gateway` now publishes an Agora catalog advertisement only when Agora serving is enabled. Explicit `advertisement.publish: true` without serving is rejected; default-on publishing is skipped with a notice when the gateway uses Agora only for backend connections.
+
 ## v0.1.8
 
 FIX: Backend tool discovery now follows MCP pagination for stdio, zrok, Agora, and HTTP transports, so every advertised tool reaches the gateway namespace instead of only the first page.

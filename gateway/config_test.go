@@ -103,6 +103,69 @@ func TestValidateAllowsAgoraServeWithoutZrok(t *testing.T) {
 	}
 }
 
+func TestValidateRejectsExplicitAgoraPublishWithoutServe(t *testing.T) {
+	cfg := validTestConfig()
+	publish := true
+	cfg.Agora = &mcpagora.Config{
+		Enabled:       true,
+		Advertisement: &mcpagora.AdvertisementConfig{Publish: &publish},
+	}
+
+	err := cfg.Validate()
+	configErr, ok := err.(*ConfigError)
+	if !ok {
+		t.Fatalf("expected ConfigError, got %T (%v)", err, err)
+	}
+	if configErr.Field != "agora.advertisement.publish" || !strings.Contains(configErr.Message, "requires agora.serve.enabled") {
+		t.Fatalf("unexpected publish-without-serve error: %#v", configErr)
+	}
+}
+
+func TestValidateRejectsExplicitAgoraPublishWhenAgoraDisabled(t *testing.T) {
+	cfg := validTestConfig()
+	publish := true
+	cfg.Agora = &mcpagora.Config{
+		Enabled:       false,
+		Advertisement: &mcpagora.AdvertisementConfig{Publish: &publish},
+	}
+
+	err := cfg.Validate()
+	configErr, ok := err.(*ConfigError)
+	if !ok {
+		t.Fatalf("expected ConfigError, got %T (%v)", err, err)
+	}
+	if configErr.Field != "agora.advertisement.publish" || !strings.Contains(configErr.Message, "requires agora.serve.enabled") {
+		t.Fatalf("unexpected publish-with-disabled-agora error: %#v", configErr)
+	}
+}
+
+func TestAgoraPublishDefaultsOffWithoutServe(t *testing.T) {
+	cfg := validTestConfig()
+	cfg.Agora = &mcpagora.Config{Enabled: true}
+
+	if cfg.AgoraPublishEnabled() {
+		t.Fatal("default publishing must be off when Agora serving is disabled")
+	}
+	if !cfg.agoraPublishDefaultedOffWithoutServe() {
+		t.Fatal("expected default-off condition to request a startup notice")
+	}
+}
+
+func TestAgoraPublishDefaultsOnWithServe(t *testing.T) {
+	cfg := validTestConfig()
+	cfg.Agora = &mcpagora.Config{
+		Enabled: true,
+		Serve:   &mcpagora.ServeConfig{Enabled: true},
+	}
+
+	if !cfg.AgoraPublishEnabled() {
+		t.Fatal("default publishing must remain on when Agora serving is enabled")
+	}
+	if cfg.agoraPublishDefaultedOffWithoutServe() {
+		t.Fatal("serving gateway must not log the default-off notice")
+	}
+}
+
 func TestValidateRejectsShareTokenWhenZrokDisabled(t *testing.T) {
 	cfg := validTestConfig()
 	cfg.Zrok.Share.Enabled = false

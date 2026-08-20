@@ -67,7 +67,7 @@
 #    tunnel: "mcp-gateway"  # bind if it exists (persistent), else create+delete (ephemeral); default: instance_name
 #    grants: []  # applied only on the create path
 #  advertisement:
-#    publish: true  # default true when agora.enabled is true
+#    publish: true  # default true when Agora serving is enabled
 #    workgroup_ids:
 #      - wg_abcdefghijkl
 #    contract_id: con_abcdefghijkl

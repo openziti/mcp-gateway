@@ -109,6 +109,36 @@ func TestServeCreateThenListenFailsUnwinds(t *testing.T) {
 	}
 }
 
+func TestServeCreateThenListenFailsUsesCleanupContext(t *testing.T) {
+	sub, ops := newTestSubsystem(t, serveEnabled)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// cancel the request as the post-create Listen fails; cleanup must still
+	// receive a live, independently bounded context.
+	ops.listenErr = errors.New("listen boom")
+	ops.listenErrAfter = 1
+	ops.listenHook = func(call int) {
+		if call == 2 {
+			cancel()
+		}
+	}
+
+	sv, err := sub.Serve(ctx)
+	if err == nil {
+		t.Fatal("expected serve error")
+	}
+	if sv != nil {
+		t.Fatal("expected nil serve on failure")
+	}
+	if ops.deleteCtxErr != nil {
+		t.Fatalf("cleanup received canceled request context: %v", ops.deleteCtxErr)
+	}
+	if len(ops.deleted) != 1 || ops.deleted[0] != "engineering" {
+		t.Fatalf("created tunnel must be deleted after request cancellation: %#v", ops.deleted)
+	}
+}
+
 func TestServeCreateConflictBinds(t *testing.T) {
 	sub, ops := newTestSubsystem(t, serveEnabled)
 	ops.createConflict = true // a racing process provisions the tunnel first

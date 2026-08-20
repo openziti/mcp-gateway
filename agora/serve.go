@@ -71,7 +71,9 @@ func (s *Subsystem) Serve(ctx context.Context) (*Serve, error) {
 	listener, err = s.ops.Listen(ctx, s.agent, name)
 	if err != nil {
 		// Unwind the tunnel we just created (delete-only-what-we-created).
-		if delErr := s.ops.Delete(ctx, s.agent, created); delErr != nil {
+		if delErr := s.withCleanupContext(func(cleanupCtx context.Context) error {
+			return s.ops.Delete(cleanupCtx, s.agent, created)
+		}); delErr != nil {
 			s.log.Warnf("failed to delete agora tunnel '%s' after listen failure: %v", name, delErr)
 		}
 		return nil, fmt.Errorf("listen on agora tunnel '%s': %w", name, err)

@@ -80,6 +80,9 @@ func (b *Backend) Start(ctx context.Context) (err error) {
 	if err := b.config.validate(b.localListener != nil); err != nil {
 		return err
 	}
+	if b.config.agoraPublishDefaultedOffWithoutServe() {
+		dl.Log().Info("skipping agora advertisement publish: agora serving is disabled")
+	}
 
 	if b.config.Agora != nil && b.config.Agora.Enabled {
 		subsys, err := mcpagora.NewSubsystem(mcpagora.SubsystemOptions{
