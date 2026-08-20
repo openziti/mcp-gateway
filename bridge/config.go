@@ -25,13 +25,22 @@ type ZrokConfig struct {
 
 // ZrokShareConfig controls zrok share serving.
 type ZrokShareConfig struct {
-	Enabled bool
+	Enabled      bool
+	AccessGrants []string
 }
 
 // Validate ensures the config is valid.
 func (c *Config) Validate() error {
 	if c.Command == "" {
 		return fmt.Errorf("command is required")
+	}
+	if len(c.ZrokShareAccessGrants()) > 0 {
+		if !c.ZrokShareEnabled() {
+			return fmt.Errorf("zrok.share.access_grants require zrok share serving to be enabled")
+		}
+		if c.ShareToken != "" {
+			return fmt.Errorf("zrok.share.access_grants apply only to newly created shares and cannot be used with share_token")
+		}
 	}
 	if c.ShareToken != "" && !c.ZrokShareEnabled() {
 		return fmt.Errorf("share_token requires zrok.share.enabled")
@@ -54,6 +63,15 @@ func (c *Config) ZrokShareEnabled() bool {
 		return true
 	}
 	return c.Zrok.Share.Enabled
+}
+
+// ZrokShareAccessGrants returns the accounts granted access to a newly
+// created closed share. an absent share block means owner-only.
+func (c *Config) ZrokShareAccessGrants() []string {
+	if c == nil || c.Zrok == nil || c.Zrok.Share == nil {
+		return nil
+	}
+	return c.Zrok.Share.AccessGrants
 }
 
 // AgoraServeEnabled reports whether the bridge should serve over Agora.

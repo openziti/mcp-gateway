@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## v0.1.8
+
+FIX: Backend tool discovery now follows MCP pagination for stdio, zrok, Agora, and HTTP transports, so every advertised tool reaches the gateway namespace instead of only the first page.
+
+FIX: Ephemeral zrok shares are closed by default instead of admitting any account holding the token. Gateway configuration and `mcp-bridge --access-grant` can grant named zrok accounts access; an empty grant list remains owner-only.
+
+FIX: HTTP backend clients no longer inherit environment proxies or follow redirects by default. Both behaviors require explicit transport opt-ins, keeping discovery and execution on the declared destination unless an operator deliberately widens it.
+
 ## v0.1.7
 
 FEATURE: stdio backend transports accept an `env_policy`: `additive` (the default, and the historical behavior) appends configured entries to the gateway's own environment; `closed` starts the backend with exactly the configured entries and nothing inherited, so an embedding caller's spawned process tree cannot recover host secrets (for example via `/proc/<pid>/environ`). Unknown values are rejected at config validation. One shared builder now owns environment construction for both the aggregator and per-session stdio spawn paths.

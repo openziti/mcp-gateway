@@ -48,6 +48,7 @@
 #zrok:
 #  share:
 #    enabled: true
+#    access_grants: []  # zrok account emails; empty means owner-only
 
 # agora integration
 # enables optional catalog publishing, serving over Agora, and backend connects

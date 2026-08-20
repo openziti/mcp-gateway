@@ -27,7 +27,8 @@ type ZrokConfig struct {
 
 // ZrokShareConfig controls zrok share serving.
 type ZrokShareConfig struct {
-	Enabled bool
+	Enabled      bool
+	AccessGrants []string
 }
 
 // OrchestratorConfig holds configuration for connecting to the orchestrator.
@@ -94,6 +95,15 @@ func (c *Config) validate(hasLocalListener bool) error {
 		return &ConfigError{Field: "backends", Message: "at least one backend is required"}
 	}
 
+	if len(c.ZrokShareAccessGrants()) > 0 {
+		if !c.ZrokShareEnabled() {
+			return &ConfigError{Field: "zrok.share.access_grants", Message: "access grants require zrok share serving to be enabled"}
+		}
+		if c.ShareToken != "" {
+			return &ConfigError{Field: "zrok.share.access_grants", Message: "access grants apply only to newly created shares and cannot be used with share_token"}
+		}
+	}
+
 	if c.ShareToken != "" && !c.ZrokShareEnabled() {
 		return &ConfigError{Field: "share_token", Message: "share_token requires zrok.share.enabled"}
 	}
@@ -129,6 +139,15 @@ func (c *Config) ZrokShareEnabled() bool {
 		return true
 	}
 	return c.Zrok.Share.Enabled
+}
+
+// ZrokShareAccessGrants returns the accounts granted access to a newly
+// created closed share. an absent share block means owner-only.
+func (c *Config) ZrokShareAccessGrants() []string {
+	if c == nil || c.Zrok == nil || c.Zrok.Share == nil {
+		return nil
+	}
+	return c.Zrok.Share.AccessGrants
 }
 
 // AgoraServeEnabled reports whether the gateway should serve over Agora.

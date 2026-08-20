@@ -21,7 +21,7 @@ type Share struct {
 }
 
 // NewShare creates a zrok private share.
-func NewShare() (*Share, error) {
+func NewShare(accessGrants []string) (*Share, error) {
 	// load zrok environment
 	root, err := environment.LoadRoot()
 	if err != nil {
@@ -35,11 +35,7 @@ func NewShare() (*Share, error) {
 	dl.Log().Info("creating zrok private share")
 
 	// create private share with proxy backend mode
-	shareReq := &sdk.ShareRequest{
-		BackendMode:    sdk.ProxyBackendMode,
-		ShareMode:      sdk.PrivateShareMode,
-		PermissionMode: sdk.OpenPermissionMode,
-	}
+	shareReq := newShareRequest(accessGrants)
 
 	shr, err := sdk.CreateShare(root, shareReq)
 	if err != nil {
@@ -67,6 +63,15 @@ func NewShare() (*Share, error) {
 		token:    shr.Token,
 		managed:  false,
 	}, nil
+}
+
+func newShareRequest(accessGrants []string) *sdk.ShareRequest {
+	return &sdk.ShareRequest{
+		BackendMode:    sdk.ProxyBackendMode,
+		ShareMode:      sdk.PrivateShareMode,
+		PermissionMode: sdk.ClosedPermissionMode,
+		AccessGrants:   append([]string(nil), accessGrants...),
+	}
 }
 
 // NewShareFromToken creates a Share from an existing share token (managed mode).

@@ -136,7 +136,7 @@ func (m *BackendManager) connectStdioBackend(ctx context.Context, cfg BackendCon
 	}
 
 	// discover tools from backend
-	toolsResult, err := session.ListTools(ctx, nil)
+	backendTools, err := listBackendTools(ctx, session)
 	if err != nil {
 		session.Close()
 		return nil, err
@@ -152,7 +152,7 @@ func (m *BackendManager) connectStdioBackend(ctx context.Context, cfg BackendCon
 		name:    name,
 		client:  mcpClient,
 		session: session,
-		tools:   toolsResult.Tools,
+		tools:   backendTools,
 	}, nil
 }
 
@@ -194,7 +194,7 @@ func (m *BackendManager) connectZrokBackend(ctx context.Context, cfg BackendConf
 	listCtx, cancel := context.WithTimeout(ctx, m.config.Aggregator.Connection.ConnectTimeout)
 	defer cancel()
 
-	toolsResult, err := session.ListTools(listCtx, nil)
+	backendTools, err := listBackendTools(listCtx, session)
 	if err != nil {
 		session.Close()
 		access.Close()
@@ -213,7 +213,7 @@ func (m *BackendManager) connectZrokBackend(ctx context.Context, cfg BackendConf
 		name:    name,
 		client:  mcpClient,
 		session: session,
-		tools:   toolsResult.Tools,
+		tools:   backendTools,
 		access:  access,
 	}, nil
 }
@@ -250,7 +250,7 @@ func (m *BackendManager) connectAgoraBackend(ctx context.Context, cfg BackendCon
 	listCtx, cancel := context.WithTimeout(ctx, m.config.Aggregator.Connection.ConnectTimeout)
 	defer cancel()
 
-	toolsResult, err := session.ListTools(listCtx, nil)
+	backendTools, err := listBackendTools(listCtx, session)
 	if err != nil {
 		session.Close()
 		return nil, fmt.Errorf("failed to list tools from agora backend: %w", err)
@@ -268,7 +268,7 @@ func (m *BackendManager) connectAgoraBackend(ctx context.Context, cfg BackendCon
 		name:    name,
 		client:  mcpClient,
 		session: session,
-		tools:   toolsResult.Tools,
+		tools:   backendTools,
 	}, nil
 }
 
@@ -300,7 +300,7 @@ func (m *BackendManager) connectHTTPBackend(ctx context.Context, cfg BackendConf
 	listCtx, cancel := context.WithTimeout(ctx, m.config.Aggregator.Connection.ConnectTimeout)
 	defer cancel()
 
-	toolsResult, err := connected.Session.ListTools(listCtx, nil)
+	backendTools, err := listBackendTools(listCtx, connected.Session)
 	if err != nil {
 		connected.Session.Close()
 		return nil, fmt.Errorf("failed to list tools from http backend: %w", err)
@@ -318,8 +318,25 @@ func (m *BackendManager) connectHTTPBackend(ctx context.Context, cfg BackendConf
 		name:    name,
 		client:  connected.Client,
 		session: connected.Session,
-		tools:   toolsResult.Tools,
+		tools:   backendTools,
 	}, nil
+}
+
+// listBackendTools reads the backend's complete advertised tool surface.
+func listBackendTools(ctx context.Context, session *mcp.ClientSession) ([]*mcp.Tool, error) {
+	var result []*mcp.Tool
+	var cursor string
+	for {
+		page, err := session.ListTools(ctx, &mcp.ListToolsParams{Cursor: cursor})
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, page.Tools...)
+		if page.NextCursor == "" {
+			return result, nil
+		}
+		cursor = page.NextCursor
+	}
 }
 
 // GetBackend returns a backend by ID.

@@ -201,9 +201,19 @@ backends:
       allow_insecure: true
 ```
 
+HTTP backend clients connect directly and refuse redirects by default. Set `allow_environment_proxy: true` or `allow_redirects: true` on the transport only when that wider network behavior is deliberate.
+
 ### Persistent Shares
 
 By default, `mcp-gateway` and `mcp-bridge` create an ephemeral share that disappears when the process exits. **Persistent shares** are stored server-side in zrok, so a gateway or bridge can stop and restart without changing the share token.
+
+Ephemeral shares are closed and owner-only by default. A bridge can grant other zrok accounts with a repeatable flag:
+
+```bash
+mcp-bridge --access-grant teammate@example.com mcp-filesystem /data
+```
+
+For `mcp-gateway`, put the same account emails under `zrok.share.access_grants` in the gateway configuration. The creating account does not belong in the list; it already has access.
 
 ```bash
 # create a persistent share with a chosen name
@@ -314,8 +324,7 @@ Each binary has a `version` subcommand that prints build metadata:
 mcp-gateway version
 ```
 
-Local builds report a developer build (e.g. `v0.1.x [developer build]`); release
-binaries are stamped with the version, commit, build date, branch, and builder.
+Local builds report a developer build (e.g. `v0.1.x [developer build]`); release binaries are stamped with the version, commit, build date, branch, and builder.
 
 ## Documentation
 

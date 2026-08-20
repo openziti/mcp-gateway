@@ -68,11 +68,13 @@ type TransportConfig struct {
 	// agora transport fields
 	AgoraTunnel string
 	// http(s) transport fields
-	Endpoint      string
-	Protocol      string // "sse" (default) or "streamable"
-	Headers       map[string]string
-	AllowInsecure bool
-	TLS           *TLSConfig
+	Endpoint              string
+	Protocol              string // "sse" (default) or "streamable"
+	Headers               map[string]string
+	AllowInsecure         bool
+	AllowEnvironmentProxy bool
+	AllowRedirects        bool
+	TLS                   *TLSConfig
 }
 
 // TLSConfig provides optional TLS settings for HTTPS backends.
@@ -153,12 +155,18 @@ func (c *Config) Validate() error {
 			if err := validateEnvPolicy(b.Transport, i); err != nil {
 				return err
 			}
+			if err := rejectHTTPBehaviorOptIns(b.Transport, i); err != nil {
+				return err
+			}
 		case "zrok":
 			if b.Transport.ShareToken == "" {
 				return &ConfigError{
 					Field:   fmt.Sprintf("backends[%d].transport.share_token", i),
 					Message: "share_token is required for zrok transport",
 				}
+			}
+			if err := rejectHTTPBehaviorOptIns(b.Transport, i); err != nil {
+				return err
 			}
 		case "agora":
 			if err := validateAgoraTransport(b.Transport, i); err != nil {
@@ -187,6 +195,22 @@ func (c *Config) Validate() error {
 		}
 	}
 
+	return nil
+}
+
+func rejectHTTPBehaviorOptIns(transport TransportConfig, index int) error {
+	if transport.AllowEnvironmentProxy {
+		return &ConfigError{
+			Field:   fmt.Sprintf("backends[%d].transport.allow_environment_proxy", index),
+			Message: "allow_environment_proxy applies only to http and https transports",
+		}
+	}
+	if transport.AllowRedirects {
+		return &ConfigError{
+			Field:   fmt.Sprintf("backends[%d].transport.allow_redirects", index),
+			Message: "allow_redirects applies only to http and https transports",
+		}
+	}
 	return nil
 }
 
@@ -246,7 +270,7 @@ func validateAgoraTransport(transport TransportConfig, index int) error {
 
 	if transport.Command != "" || len(transport.Args) > 0 || len(transport.Env) > 0 || transport.WorkingDir != "" ||
 		transport.ShareToken != "" || transport.Endpoint != "" || transport.Protocol != "" || len(transport.Headers) > 0 ||
-		transport.AllowInsecure || transport.TLS != nil {
+		transport.AllowInsecure || transport.AllowEnvironmentProxy || transport.AllowRedirects || transport.TLS != nil {
 		return &ConfigError{
 			Field:   fmt.Sprintf("backends[%d].transport", index),
 			Message: "agora transport cannot set stdio, zrok, or http transport fields",

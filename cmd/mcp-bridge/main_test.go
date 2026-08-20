@@ -36,13 +36,14 @@ func (f *fakeBridgeRunner) Stop() error {
 
 func TestRunStopsBridgeOnRunError(t *testing.T) {
 	origFactory := newBridgeRunner
-	origEnv, origWorkingDir, origShareToken := env, workingDir, shareToken
+	origEnv, origWorkingDir, origShareToken, origAccessGrants := env, workingDir, shareToken, accessGrants
 	origNetwork, origIntegrationFile := network, agoraIntegrationFile
 	defer func() {
 		newBridgeRunner = origFactory
 		env = origEnv
 		workingDir = origWorkingDir
 		shareToken = origShareToken
+		accessGrants = origAccessGrants
 		network = origNetwork
 		agoraIntegrationFile = origIntegrationFile
 	}()
@@ -141,6 +142,37 @@ func TestApplyOverridesAgoraTunnelFlag(t *testing.T) {
 	})
 }
 
+func TestApplyOverridesAccessGrantsNilSafely(t *testing.T) {
+	withBridgeGlobals(t, func() {
+		accessGrants = []string{"one@example.com", "two@example.com"}
+		cfg := &bridge.Config{Command: "backend"}
+
+		if err := applyOverrides(cfg); err != nil {
+			t.Fatalf("applyOverrides returned error: %v", err)
+		}
+		got := cfg.ZrokShareAccessGrants()
+		if len(got) != 2 || got[0] != "one@example.com" || got[1] != "two@example.com" {
+			t.Fatalf("access grants = %#v, want both flag values", got)
+		}
+		if !cfg.ZrokShareEnabled() {
+			t.Fatal("access-grant flag must preserve default zrok sharing")
+		}
+	})
+}
+
+func TestApplyOverridesDefaultsToOwnerOnly(t *testing.T) {
+	withBridgeGlobals(t, func() {
+		cfg := &bridge.Config{Command: "backend"}
+
+		if err := applyOverrides(cfg); err != nil {
+			t.Fatalf("applyOverrides returned error: %v", err)
+		}
+		if got := cfg.ZrokShareAccessGrants(); len(got) != 0 {
+			t.Fatalf("access grants = %#v, want owner-only", got)
+		}
+	})
+}
+
 func TestApplyOverridesAgoraIntegrationFilePrecedence(t *testing.T) {
 	withBridgeGlobals(t, func() {
 		t.Setenv("AGORA_MCP_BRIDGE_INTEGRATION_FILE", "/env/agora.yaml")
@@ -228,12 +260,13 @@ func TestApplyOverridesPreservesExistingAgoraFields(t *testing.T) {
 
 func withBridgeGlobals(t *testing.T, fn func()) {
 	t.Helper()
-	origEnv, origWorkingDir, origShareToken := env, workingDir, shareToken
+	origEnv, origWorkingDir, origShareToken, origAccessGrants := env, workingDir, shareToken, accessGrants
 	origNetwork, origTunnel, origIntegrationFile := network, agoraTunnel, agoraIntegrationFile
 	defer func() {
 		env = origEnv
 		workingDir = origWorkingDir
 		shareToken = origShareToken
+		accessGrants = origAccessGrants
 		network = origNetwork
 		agoraTunnel = origTunnel
 		agoraIntegrationFile = origIntegrationFile
@@ -242,6 +275,7 @@ func withBridgeGlobals(t *testing.T, fn func()) {
 	env = nil
 	workingDir = ""
 	shareToken = ""
+	accessGrants = nil
 	network = ""
 	agoraTunnel = ""
 	agoraIntegrationFile = ""

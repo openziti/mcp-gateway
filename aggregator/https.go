@@ -26,6 +26,10 @@ type HTTPClientSession struct {
 // for connecting to HTTP(S) MCP backends.
 func BuildHTTPClient(cfg TransportConfig) (*http.Client, error) {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.Proxy = nil
+	if cfg.AllowEnvironmentProxy {
+		transport.Proxy = http.ProxyFromEnvironment
+	}
 	endpoint, err := validateEndpointForClient(cfg)
 	if err != nil {
 		return nil, err
@@ -54,7 +58,30 @@ func BuildHTTPClient(cfg TransportConfig) (*http.Client, error) {
 		}
 	}
 
-	return &http.Client{Transport: rt}, nil
+	client := &http.Client{
+		Transport:     rt,
+		CheckRedirect: redirectPolicy(cfg),
+	}
+
+	return client, nil
+}
+
+func redirectPolicy(cfg TransportConfig) func(*http.Request, []*http.Request) error {
+	return func(req *http.Request, via []*http.Request) error {
+		if !cfg.AllowRedirects {
+			return fmt.Errorf("mcp-gateway: HTTP backend refuses redirects")
+		}
+		if len(via) >= 10 {
+			return fmt.Errorf("mcp-gateway: stopped after 10 redirects")
+		}
+
+		redirected := cfg
+		redirected.Endpoint = req.URL.String()
+		if _, err := validateEndpointForClient(redirected); err != nil {
+			return fmt.Errorf("mcp-gateway: HTTP backend refuses redirect to %q: %w", req.URL.String(), err)
+		}
+		return nil
+	}
 }
 
 func loadRootCAs(caCertFile string) (*x509.CertPool, error) {
