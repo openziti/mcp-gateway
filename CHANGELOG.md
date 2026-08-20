@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v0.1.8
+
 FIX: Backend tool discovery now follows MCP pagination for stdio, zrok, Agora, and HTTP transports, so every advertised tool reaches the gateway namespace instead of only the first page.
 
 FIX: Ephemeral zrok shares are closed by default instead of admitting any account holding the token. Gateway configuration and `mcp-bridge --access-grant` can grant named zrok accounts access; an empty grant list remains owner-only.
