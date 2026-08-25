@@ -21,6 +21,7 @@ import (
 	mcpagora "github.com/openziti/mcp-gateway/agora"
 	"github.com/openziti/mcp-gateway/gateway"
 	"github.com/openziti/mcp-gateway/model"
+	"github.com/openziti/mcp-gateway/streamable"
 )
 
 // Bridge wraps a single stdio MCP server and exposes it via zrok.
@@ -34,7 +35,7 @@ type Bridge struct {
 	agoraServe     *mcpagora.Serve
 	agoraSubsystem *mcpagora.Subsystem
 	mainCtx        context.Context
-	streamable     gateway.StreamableSessions
+	streamable     streamable.Sessions
 	mu             sync.Mutex
 	sessions       map[string]*bridgeSession
 }
@@ -189,7 +190,7 @@ func (b *Bridge) discoverTools(ctx context.Context) ([]*mcp.Tool, error) {
 
 // createHTTPHandler creates a streamable HTTP handler that spawns per-client subprocesses.
 func (b *Bridge) createHTTPHandler() http.Handler {
-	return b.streamable.Handler(b.cfg.EffectiveSessionIdleTimeout(), func(r *http.Request) (*mcp.Server, func()) {
+	return b.streamable.Handler(streamable.Options{SessionIdleTimeout: b.cfg.EffectiveSessionIdleTimeout()}, func(r *http.Request) (*mcp.Server, func()) {
 		session, err := b.createBridgeSession(b.mainCtx, r.RemoteAddr, r.Header.Get("User-Agent"))
 		if err != nil {
 			dl.Log().With("error", err).Error("failed to create bridge session")

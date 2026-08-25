@@ -5,7 +5,7 @@ import (
 	"time"
 
 	mcpagora "github.com/openziti/mcp-gateway/agora"
-	"github.com/openziti/mcp-gateway/gateway"
+	"github.com/openziti/mcp-gateway/streamable"
 )
 
 // Config holds the configuration for a single tool backend.
@@ -67,7 +67,7 @@ func (c *Config) Validate() error {
 // timeout, applying the default when it is unset.
 func (c *Config) EffectiveSessionIdleTimeout() time.Duration {
 	if c == nil || c.SessionIdleTimeout == nil {
-		return gateway.DefaultSessionIdleTimeout
+		return streamable.DefaultSessionIdleTimeout
 	}
 	return *c.SessionIdleTimeout
 }

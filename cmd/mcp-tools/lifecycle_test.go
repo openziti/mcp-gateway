@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	mcpagora "github.com/openziti/mcp-gateway/agora"
 	"github.com/openziti/mcp-gateway/tools"
@@ -195,5 +196,21 @@ func TestResolveToolsTargetAgoraIntegrationFilePrecedence(t *testing.T) {
 	}
 	if target.AgoraConfig == nil || target.AgoraConfig.IntegrationFile != "/flag/agora.yaml" {
 		t.Fatalf("flag integration file did not win: %+v", target.AgoraConfig)
+	}
+}
+
+func TestHTTPCommandRejectsNegativeSessionIdleTimeout(t *testing.T) {
+	client := &fakeToolsClient{}
+	setToolsClientFactory(t, client, nil)
+
+	command := newHTTPCommand()
+	command.sessionIdleTimeout = -time.Second
+
+	err := command.run(nil, []string{"share"})
+	if err == nil || !strings.Contains(err.Error(), "must not be negative") {
+		t.Fatalf("expected negative timeout error, got %v", err)
+	}
+	if client.startCalls != 0 {
+		t.Fatalf("expected no client to be started, got %d start calls", client.startCalls)
 	}
 }

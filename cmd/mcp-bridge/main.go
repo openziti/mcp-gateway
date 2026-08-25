@@ -13,7 +13,7 @@ import (
 	"github.com/michaelquigley/df/dl"
 	mcpagora "github.com/openziti/mcp-gateway/agora"
 	"github.com/openziti/mcp-gateway/bridge"
-	"github.com/openziti/mcp-gateway/gateway"
+	"github.com/openziti/mcp-gateway/streamable"
 	"github.com/spf13/cobra"
 )
 
@@ -45,7 +45,7 @@ func init() {
 	rootCmd.Flags().StringVar(&network, "network", "", "network shortcut: zrok or agora")
 	rootCmd.Flags().StringVar(&agoraTunnel, "agora-tunnel", "", "agora tunnel name to serve (bind if it exists, else create+delete; default: instance name)")
 	rootCmd.Flags().StringVar(&agoraIntegrationFile, "agora-integration-file", "", "path to Agora integration file (overrides config)")
-	rootCmd.Flags().DurationVar(&sessionIdleTimeout, "session-idle-timeout", gateway.DefaultSessionIdleTimeout, "close Streamable HTTP sessions after this much inactivity (0 disables)")
+	rootCmd.Flags().DurationVar(&sessionIdleTimeout, "session-idle-timeout", streamable.DefaultSessionIdleTimeout, "close Streamable HTTP sessions after this much inactivity (0 disables)")
 }
 
 type bridgeRunner interface {

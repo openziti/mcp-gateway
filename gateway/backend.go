@@ -18,6 +18,7 @@ import (
 	mcpagora "github.com/openziti/mcp-gateway/agora"
 	"github.com/openziti/mcp-gateway/gateway/ipc"
 	"github.com/openziti/mcp-gateway/model"
+	"github.com/openziti/mcp-gateway/streamable"
 )
 
 // Backend manages the lifecycle of a zrok share serving MCP with per-client sessions.
@@ -36,7 +37,7 @@ type Backend struct {
 	ipcClient      *ipc.Client
 	ipcCancel      context.CancelFunc
 	mainCtx        context.Context // stored for reconnection callback
-	streamable     StreamableSessions
+	streamable     streamable.Sessions
 }
 
 // New creates a Backend from config.
@@ -270,7 +271,7 @@ func (b *Backend) discoverTools(ctx context.Context, agoraDial aggregator.AgoraD
 
 // createHTTPHandler creates a streamable HTTP handler that spawns per-client sessions.
 func (b *Backend) createHTTPHandler() http.Handler {
-	return b.streamable.Handler(b.config.EffectiveSessionIdleTimeout(), func(r *http.Request) (*mcp.Server, func()) {
+	return b.streamable.Handler(streamable.Options{SessionIdleTimeout: b.config.EffectiveSessionIdleTimeout()}, func(r *http.Request) (*mcp.Server, func()) {
 		return b.createMCPServer(r)
 	})
 }

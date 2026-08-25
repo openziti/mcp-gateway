@@ -103,6 +103,8 @@ mcp-tools http --agora mcp-gateway --bind 127.0.0.1:8080
 
 For Agora mode, `mcp-tools` uses a minimal Agora config containing `api_endpoint` and `env_root`. It does not publish advertisements.
 
+The Agora attachment (or zrok access) is acquired once at startup and held for the life of the process, matching the gateway's dialer posture. Fabric MCP sessions are not: `mcp-tools http` opens one per local agent and closes it when that agent disconnects, so isolation the gateway or bridge provides survives the hop through `mcp-tools`. `mcp-tools run` is a single stdio frontend and so owns exactly one.
+
 ```bash
 mcp-tools run \
   --agora mcp-gateway \
@@ -148,6 +150,7 @@ mcp-tools run \
 | `--agora-integration-file <path>` | Sets the Agora integration file |
 | `--stateless` | HTTP mode only; uses stateless streamable HTTP behavior |
 | `--json-response` | HTTP mode only; prefers JSON responses over streamed responses |
+| `--session-idle-timeout <duration>` | HTTP mode only; closes inactive local sessions and their fabric sessions; default `30m`, `0` disables |
 
 `AGORA_MCP_TOOLS_INTEGRATION_FILE` sets the integration file when the CLI flag is not provided.
 
@@ -236,7 +239,7 @@ For `mcp-bridge`, `--network=agora` selects Agora-only bridge mode for the invoc
 
 Tunnels are always created in a single stream mode (TCP); MCP always rides Streamable HTTP over that stream. The advertisement honestly labels what a client speaks (`tunnel_mode = "http"`); it is discovery metadata, not a transport switch, and there is no operator `tunnel_mode` knob.
 
-Gateway and bridge Streamable HTTP sessions expire after 30 minutes of inactivity, releasing their dedicated backend connections or subprocess. Configure `session_idle_timeout` in gateway YAML or `--session-idle-timeout` for `mcp-bridge`; the timeout is independent of zrok share and Agora tunnel lifecycle. An explicit `0` disables idle expiry and can retain backend resources when a client disappears without terminating its session.
+Gateway, bridge, and `mcp-tools http` Streamable HTTP sessions expire after 30 minutes of inactivity, releasing their dedicated backend connections, subprocess, or fabric session. Configure `session_idle_timeout` in gateway YAML or `--session-idle-timeout` for `mcp-bridge` and `mcp-tools http`; the timeout is independent of zrok share and Agora tunnel lifecycle. An explicit `0` disables idle expiry and can retain backend resources when a client disappears without terminating its session.
 
 ## Per-Backend `transport.type: agora`
 

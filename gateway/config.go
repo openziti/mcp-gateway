@@ -7,6 +7,7 @@ import (
 	"github.com/michaelquigley/df/dd"
 	"github.com/openziti/mcp-gateway/aggregator"
 	"github.com/openziti/mcp-gateway/agora"
+	"github.com/openziti/mcp-gateway/streamable"
 )
 
 // Config represents the share backend configuration.
@@ -49,7 +50,7 @@ func DefaultOrchestratorConfig() *OrchestratorConfig {
 // DefaultConfig returns a Config with defaults pre-populated.
 func DefaultConfig() *Config {
 	aggDefaults := aggregator.DefaultConfig()
-	sessionIdleTimeout := DefaultSessionIdleTimeout
+	sessionIdleTimeout := streamable.DefaultSessionIdleTimeout
 	return &Config{
 		Aggregator:         aggDefaults.Aggregator,
 		SessionIdleTimeout: &sessionIdleTimeout,
@@ -139,7 +140,7 @@ func (c *Config) validate(hasLocalListener bool) error {
 // timeout, applying the default when it is unset.
 func (c *Config) EffectiveSessionIdleTimeout() time.Duration {
 	if c == nil || c.SessionIdleTimeout == nil {
-		return DefaultSessionIdleTimeout
+		return streamable.DefaultSessionIdleTimeout
 	}
 	return *c.SessionIdleTimeout
 }

@@ -14,7 +14,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	mcpagora "github.com/openziti/mcp-gateway/agora"
-	"github.com/openziti/mcp-gateway/gateway"
+	"github.com/openziti/mcp-gateway/streamable"
 )
 
 const bridgeSessionHelperEnv = "MCP_BRIDGE_SESSION_HELPER"
@@ -140,7 +140,7 @@ func TestBridgeStopClosesActiveStreamableSession(t *testing.T) {
 
 func newStreamableBridgeTestServer(t *testing.T, sessionIdleTimeout ...time.Duration) (*Bridge, *httptest.Server) {
 	t.Helper()
-	timeout := gateway.DefaultSessionIdleTimeout
+	timeout := streamable.DefaultSessionIdleTimeout
 	if len(sessionIdleTimeout) > 0 {
 		timeout = sessionIdleTimeout[0]
 	}

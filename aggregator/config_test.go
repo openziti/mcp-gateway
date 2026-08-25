@@ -267,6 +267,29 @@ func TestValidateRejectsUnknownOverlayProtocols(t *testing.T) {
 	}
 }
 
+func TestValidateRejectsProtocolForStdioTransport(t *testing.T) {
+	for _, protocol := range []string{"streamable", "sse", "unknown"} {
+		t.Run(protocol, func(t *testing.T) {
+			cfg := &Config{Backends: []BackendConfig{{
+				ID: "local",
+				Transport: TransportConfig{
+					Type:     "stdio",
+					Command:  "mcp-server",
+					Protocol: protocol,
+				},
+			}}}
+			err := cfg.Validate()
+			configErr, ok := err.(*ConfigError)
+			if !ok {
+				t.Fatalf("expected ConfigError, got %T (%v)", err, err)
+			}
+			if configErr.Field != "backends[0].transport.protocol" {
+				t.Fatalf("field = %q, want protocol field", configErr.Field)
+			}
+		})
+	}
+}
+
 func TestValidateRejectsAgoraTransportWithoutTunnel(t *testing.T) {
 	cfg := &Config{
 		Backends: []BackendConfig{{

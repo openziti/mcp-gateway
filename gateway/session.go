@@ -365,9 +365,11 @@ func (cs *ClientSession) Close() error {
 	cs.closed = true
 	cs.mu.Unlock()
 
-	// cancel context to signal all operations to stop
-	cs.cancel()
-
+	// close backends before cancelling. a fabric-backed backend terminates its
+	// remote MCP session with a Streamable HTTP DELETE built on the connection
+	// context, so cancelling first would strand that session on the far side
+	// until its idle timer expired. stdio backends do not care about the
+	// order — the subprocess dies either way.
 	var errs []error
 	for id, backend := range cs.backends {
 		if err := backend.Close(); err != nil {
@@ -375,6 +377,9 @@ func (cs *ClientSession) Close() error {
 			errs = append(errs, fmt.Errorf("backend '%s': %w", id, err))
 		}
 	}
+
+	// now signal any remaining operation to stop.
+	cs.cancel()
 
 	dl.Log().
 		With("session_id", cs.id).

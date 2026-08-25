@@ -1,8 +1,14 @@
 inbox:
   - agora-serve-resilience.md
   - cross-org-dial-policy.md
-  - integration-file-environment-precedence.md
   - runtime-backend-add-and-remove.md
   - unify-mcp-tools-transport-paths.md
 researching:
   - token-output-shares-stdout-with-logs.md
+  - move-zrok-access-below-the-client-package.md
+  - reject-cross-transport-backend-fields.md
+  - gateway-sessions-leak-on-process-shutdown.md
+  - wrapper-option-values-mistaken-for-bridged-command.md
+  - integration-file-environment-precedence.md
+building:
+  - isolate-mcp-tools-http-backend-sessions.md

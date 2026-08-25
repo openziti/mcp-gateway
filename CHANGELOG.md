@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+CHANGE: **The Streamable HTTP session lifecycle moved out of `gateway` into a new `streamable` package.** `gateway.StreamableSessions` is now `streamable.Sessions` and `gateway.DefaultSessionIdleTimeout` is now `streamable.DefaultSessionIdleTimeout`; Go consumers importing either symbol must update the import path. The move exists so `mcp-tools` can share the same per-session lifecycle, which it could not do while the type lived in `gateway` — `gateway` imports `tools`, so the dependency could only run one way.
+
+FIX: **`mcp-tools http` now gives every local client its own session on the remote gateway or bridge.** It previously opened one fabric MCP session at startup and served every local Streamable HTTP session from it, so multiple agents behind one `mcp-tools http` shared a single remote session and its backend state — defeating the isolation the gateway and bridge provide. The zrok access or Agora attachment is still acquired once and held for the process lifetime; only the MCP session is now per-client, and it is released when the client disconnects, its session expires, its initialization fails, or `mcp-tools` shuts down. `--stateless` mode owns a fabric session per request. `mcp-tools http` also gains `--session-idle-timeout`, matching `mcp-bridge`.
+
+FIX: Gateway client sessions now close their backends before cancelling the session context. A `zrok`, `agora`, or `http` backend terminates its remote MCP session with a Streamable HTTP `DELETE` built on that context, so cancelling first left the downstream gateway or bridge holding the client's dedicated backends until its own idle timer expired. Stdio backends were unaffected.
+
+FIX: Stdio backends now reject `transport.protocol` instead of accepting and ignoring it; protocol selection applies only to HTTP, HTTPS, zrok, and Agora backends.
+
 ## v0.1.10
 
 CHANGE: **Fabric-served gateway and bridge endpoints now use Streamable HTTP instead of the deprecated SSE transport.** `mcp-tools run` and `mcp-tools http` move with that wire surface over both zrok and Agora; there is no dual-serving transition.

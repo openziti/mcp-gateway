@@ -9,7 +9,7 @@ import (
 
 	mcpagora "github.com/openziti/mcp-gateway/agora"
 	"github.com/openziti/mcp-gateway/bridge"
-	"github.com/openziti/mcp-gateway/gateway"
+	"github.com/openziti/mcp-gateway/streamable"
 )
 
 type fakeBridgeRunner struct {
@@ -307,6 +307,6 @@ func withBridgeGlobals(t *testing.T, fn func()) {
 	network = ""
 	agoraTunnel = ""
 	agoraIntegrationFile = ""
-	sessionIdleTimeout = gateway.DefaultSessionIdleTimeout
+	sessionIdleTimeout = streamable.DefaultSessionIdleTimeout
 	fn()
 }

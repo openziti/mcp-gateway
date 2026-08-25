@@ -152,6 +152,12 @@ func (c *Config) Validate() error {
 					Message: "command is required for stdio transport",
 				}
 			}
+			if b.Transport.Protocol != "" {
+				return &ConfigError{
+					Field:   fmt.Sprintf("backends[%d].transport.protocol", i),
+					Message: "protocol is supported only for http, https, zrok, and agora transports",
+				}
+			}
 			if err := validateEnvPolicy(b.Transport, i); err != nil {
 				return err
 			}

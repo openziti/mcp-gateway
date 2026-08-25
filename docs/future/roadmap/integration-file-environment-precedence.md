@@ -1,8 +1,9 @@
 ---
 title: integration-file environment precedence
-state: inbox
+state: researching
 created: 2026-08-20
 tags: [defect]
+milestone: v0.1.x
 source: terminus/6c829eb6de9d
 ---
 
