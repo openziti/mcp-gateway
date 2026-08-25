@@ -132,6 +132,15 @@ func TestCallerProvidedListenerServesStreamableHTTP(t *testing.T) {
 	go func() { runDone <- backend.Run(ctx) }()
 	endpoint := "http://" + listener.Addr().String()
 
+	legacyClient := mcp.NewClient(&mcp.Implementation{Name: "legacy-test", Version: "1.0.0"}, nil)
+	legacyCtx, legacyCancel := context.WithTimeout(ctx, time.Second)
+	_, err = legacyClient.Connect(legacyCtx, &mcp.SSEClientTransport{Endpoint: endpoint + "/sse"}, nil)
+	legacyCancel()
+	if err == nil {
+		t.Fatal("gateway unexpectedly retained its legacy SSE surface")
+	}
+	waitForNoGatewaySessions(t, backend)
+
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewBufferString(`{"jsonrpc":"2.0","id":1,"method":"tools/list"}`))
 	if err != nil {
 		t.Fatal(err)

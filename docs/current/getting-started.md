@@ -70,6 +70,8 @@ We'll use `mcp-filesystem`, a sandboxed filesystem MCP server bundled with this 
 mcp-bridge mcp-filesystem ~/Documents
 ```
 
+The bridge closes an inactive client session and its dedicated backend subprocess after 30 minutes. Use `--session-idle-timeout <duration>` to change that bound. An explicit `0` disables idle expiry and can retain the subprocess when a client disappears without terminating its session.
+
 The bridge does three things:
 1. Spawns `mcp-filesystem ~/Documents` as a child process
 2. Creates a zrok private share on the overlay network
@@ -446,18 +448,18 @@ For agents or clients that expect an HTTP endpoint (like n8n), use `mcp-tools ht
 mcp-tools http x9y8z7w6v5u4 --bind 127.0.0.1:8080
 ```
 
-This starts a local HTTP server that proxies to the zrok share. Clients connect to `http://127.0.0.1:8080`.
+This starts a local Streamable HTTP server that proxies to the zrok share. Clients connect to `http://127.0.0.1:8080`.
 
 Options:
 - `--bind` — address to listen on (default: `127.0.0.1:8080`)
 - `--stateless` — stateless mode, no session persistence
-- `--json-response` — prefer JSON responses over SSE streams
+- `--json-response` — prefer JSON responses over streamed responses
 
 **n8n example:**
 
 Configure the n8n MCP Client Tool:
 - **URL**: `http://127.0.0.1:8080`
-- **Transport**: SSE (default) or streamable HTTP
+- **Transport**: Streamable HTTP
 
 ### Other agents
 

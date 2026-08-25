@@ -2,8 +2,10 @@ package bridge
 
 import (
 	"fmt"
+	"time"
 
 	mcpagora "github.com/openziti/mcp-gateway/agora"
+	"github.com/openziti/mcp-gateway/gateway"
 )
 
 // Config holds the configuration for a single tool backend.
@@ -13,6 +15,7 @@ type Config struct {
 	Env                map[string]string
 	WorkingDir         string
 	ShareToken         string
+	SessionIdleTimeout *time.Duration
 	AgoraCapabilityTag string
 	Zrok               *ZrokConfig
 	Agora              *mcpagora.Config
@@ -33,6 +36,9 @@ type ZrokShareConfig struct {
 func (c *Config) Validate() error {
 	if c.Command == "" {
 		return fmt.Errorf("command is required")
+	}
+	if c.SessionIdleTimeout != nil && *c.SessionIdleTimeout < 0 {
+		return fmt.Errorf("session idle timeout must not be negative")
 	}
 	if len(c.ZrokShareAccessGrants()) > 0 {
 		if !c.ZrokShareEnabled() {
@@ -55,6 +61,15 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("agora.advertisement.publish requires agora.serve.enabled for mcp-bridge")
 	}
 	return nil
+}
+
+// EffectiveSessionIdleTimeout returns the configured Streamable HTTP idle
+// timeout, applying the default when it is unset.
+func (c *Config) EffectiveSessionIdleTimeout() time.Duration {
+	if c == nil || c.SessionIdleTimeout == nil {
+		return gateway.DefaultSessionIdleTimeout
+	}
+	return *c.SessionIdleTimeout
 }
 
 // ZrokShareEnabled reports whether the bridge should serve over zrok.

@@ -168,22 +168,22 @@ See [Agora Integration](docs/current/agora.md) for configuration, CLI flags, int
 
 ### Connect to HTTP and HTTPS MCP Servers
 
-Gateway can aggregate remote MCP servers over HTTP(S), using either SSE or streamable HTTP transport. `type: https` is strict and only accepts `https://` endpoints. `type: http` supports both `http://` and `https://`, but plaintext HTTP requires explicit opt-in.
+Gateway can aggregate remote MCP servers over HTTP(S), using either Streamable HTTP (the default) or the legacy SSE transport. Set `protocol: sse` explicitly for an SSE endpoint. `type: https` is strict and only accepts `https://` endpoints. `type: http` supports both `http://` and `https://`, but plaintext HTTP requires explicit opt-in.
 
 ```yaml
 backends:
   - id: remote-api
     transport:
       type: https
-      endpoint: "https://mcp.example.com/sse"
+      endpoint: "https://mcp.example.com/mcp"
       headers:
         Authorization: "Bearer sk-abc123"
 
-  - id: internal-api
+  - id: legacy-api
     transport:
       type: https
-      endpoint: "https://mcp.internal.corp/mcp"
-      protocol: "streamable"
+      endpoint: "https://mcp.internal.corp/sse"
+      protocol: "sse"
       tls:
         ca_cert_file: "/etc/ssl/certs/internal-ca.pem"
 ```
@@ -197,7 +197,7 @@ backends:
   - id: local-dev
     transport:
       type: http
-      endpoint: "http://localhost:8080/sse"
+      endpoint: "http://localhost:8080/mcp"
       allow_insecure: true
 ```
 
@@ -254,9 +254,11 @@ mcp-tools http --agora <tunnel> --bind 127.0.0.1:8080
 
 Options:
 - `--stateless` - Stateless mode (no session persistence)
-- `--json-response` - Prefer JSON responses over SSE streams
+- `--json-response` - Prefer JSON responses over streamed responses
 
-The gateway and bridge natively serve MCP over HTTP/SSE through zrok. Use `mcp-tools http` when you need a local HTTP endpoint for clients that don't support the `stdio` transport provided by `mcp-tools` directly.
+The gateway and bridge natively serve MCP over Streamable HTTP through zrok and Agora. Use `mcp-tools http` when you need a local Streamable HTTP endpoint for clients that don't support the `stdio` transport provided by `mcp-tools` directly.
+
+Inactive Streamable HTTP sessions expire after 30 minutes so a client that disappears without terminating its session cannot retain dedicated backend connections or bridge subprocesses indefinitely. Set `session_idle_timeout` in gateway YAML or pass `mcp-bridge --session-idle-timeout <duration>` to tune that bound. An explicit `0` disables idle expiry and may retain those resources until the client terminates its session or the server shuts down.
 
 ## Tool Filtering
 

@@ -1,10 +1,27 @@
 package tools
 
 import (
+	"net/http"
 	"testing"
 
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 	mcpagora "github.com/openziti/mcp-gateway/agora"
 )
+
+func TestFabricMCPTransportUsesStreamableOrigin(t *testing.T) {
+	httpClient := &http.Client{}
+	transport := newFabricMCPTransport(httpClient)
+	streamable, ok := transport.(*mcp.StreamableClientTransport)
+	if !ok {
+		t.Fatalf("transport = %T, want streamable HTTP", transport)
+	}
+	if streamable.Endpoint != "http://mcp-backend" {
+		t.Fatalf("endpoint = %q, want suffix-free fabric origin", streamable.Endpoint)
+	}
+	if streamable.HTTPClient != httpClient {
+		t.Fatal("fabric HTTP client was not preserved")
+	}
+}
 
 func TestNewAgoraRequiresTunnel(t *testing.T) {
 	_, err := NewAgora("", &mcpagora.Config{Enabled: true})

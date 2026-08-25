@@ -132,23 +132,24 @@ func validateEndpointForClient(cfg TransportConfig) (*url.URL, error) {
 	return endpoint, nil
 }
 
-// BuildMCPTransport creates the appropriate MCP client transport based on the
-// protocol setting. Defaults to SSE if protocol is empty.
-func BuildMCPTransport(cfg TransportConfig, httpClient *http.Client) (mcp.Transport, error) {
+// BuildMCPTransport creates the appropriate MCP client transport for endpoint
+// based on the protocol setting. Defaults to streamable HTTP when protocol is
+// empty.
+func BuildMCPTransport(cfg TransportConfig, endpoint string, httpClient *http.Client) (mcp.Transport, error) {
 	protocol := cfg.Protocol
 	if protocol == "" {
-		protocol = "sse"
+		protocol = "streamable"
 	}
 
 	switch protocol {
 	case "sse":
 		return &mcp.SSEClientTransport{
-			Endpoint:   cfg.Endpoint,
+			Endpoint:   endpoint,
 			HTTPClient: httpClient,
 		}, nil
 	case "streamable":
 		return &mcp.StreamableClientTransport{
-			Endpoint:   cfg.Endpoint,
+			Endpoint:   endpoint,
 			HTTPClient: httpClient,
 		}, nil
 	default:
@@ -156,17 +157,42 @@ func BuildMCPTransport(cfg TransportConfig, httpClient *http.Client) (mcp.Transp
 	}
 }
 
+const overlayMCPOrigin = "http://mcp-backend"
+
+// ConnectOverlayClientSession connects through a fabric-provided HTTP client.
+// Streamable HTTP uses the origin itself; explicit legacy SSE uses its /sse
+// endpoint.
+func ConnectOverlayClientSession(ctx context.Context, impl *mcp.Implementation, cfg TransportConfig, httpClient *http.Client, connectTimeout time.Duration) (*HTTPClientSession, error) {
+	return connectMCPClientSession(ctx, impl, cfg, overlayMCPEndpoint(cfg.Protocol), httpClient, connectTimeout)
+}
+
+func overlayMCPEndpoint(protocol string) string {
+	endpoint := overlayMCPOrigin
+	if protocol == "sse" {
+		endpoint += "/sse"
+	}
+	return endpoint
+}
+
 // ConnectHTTPClientSession creates and connects an MCP client/session pair for
 // an HTTP(S) backend using the shared timeout-wrapped connect flow.
 func ConnectHTTPClientSession(ctx context.Context, impl *mcp.Implementation, cfg TransportConfig, connectTimeout time.Duration) (*HTTPClientSession, error) {
-	mcpClient := mcp.NewClient(impl, nil)
-
 	httpClient, err := BuildHTTPClient(cfg)
 	if err != nil {
 		return nil, fmt.Errorf("failed to build http client: %w", err)
 	}
 
-	transport, err := BuildMCPTransport(cfg, httpClient)
+	connected, err := connectMCPClientSession(ctx, impl, cfg, cfg.Endpoint, httpClient, connectTimeout)
+	if err != nil {
+		return nil, fmt.Errorf("failed to connect to http backend: %w", err)
+	}
+	return connected, nil
+}
+
+func connectMCPClientSession(ctx context.Context, impl *mcp.Implementation, cfg TransportConfig, endpoint string, httpClient *http.Client, connectTimeout time.Duration) (*HTTPClientSession, error) {
+	mcpClient := mcp.NewClient(impl, nil)
+
+	transport, err := BuildMCPTransport(cfg, endpoint, httpClient)
 	if err != nil {
 		return nil, fmt.Errorf("failed to build mcp transport: %w", err)
 	}
@@ -175,7 +201,7 @@ func ConnectHTTPClientSession(ctx context.Context, impl *mcp.Implementation, cfg
 		return mcpClient.Connect(connectCtx, transport, nil)
 	})
 	if err != nil {
-		return nil, fmt.Errorf("failed to connect to http backend: %w", err)
+		return nil, err
 	}
 
 	return &HTTPClientSession{

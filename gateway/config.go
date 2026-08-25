@@ -11,13 +11,14 @@ import (
 
 // Config represents the share backend configuration.
 type Config struct {
-	Aggregator   aggregator.AggregatorConfig
-	Backends     []aggregator.BackendConfig
-	Zrok         *ZrokConfig
-	Agora        *agora.Config
-	ShareToken   string // if set, use existing share (managed mode)
-	Orchestrator *OrchestratorConfig
-	LogFile      string // if set, redirect logging to this file
+	Aggregator         aggregator.AggregatorConfig
+	Backends           []aggregator.BackendConfig
+	SessionIdleTimeout *time.Duration
+	Zrok               *ZrokConfig
+	Agora              *agora.Config
+	ShareToken         string // if set, use existing share (managed mode)
+	Orchestrator       *OrchestratorConfig
+	LogFile            string // if set, redirect logging to this file
 }
 
 // ZrokConfig holds zrok-specific gateway configuration.
@@ -48,8 +49,10 @@ func DefaultOrchestratorConfig() *OrchestratorConfig {
 // DefaultConfig returns a Config with defaults pre-populated.
 func DefaultConfig() *Config {
 	aggDefaults := aggregator.DefaultConfig()
+	sessionIdleTimeout := DefaultSessionIdleTimeout
 	return &Config{
-		Aggregator: aggDefaults.Aggregator,
+		Aggregator:         aggDefaults.Aggregator,
+		SessionIdleTimeout: &sessionIdleTimeout,
 		Zrok: &ZrokConfig{
 			Share: &ZrokShareConfig{
 				Enabled: true,
@@ -94,6 +97,9 @@ func (c *Config) validate(hasLocalListener bool) error {
 	if len(c.Backends) == 0 {
 		return &ConfigError{Field: "backends", Message: "at least one backend is required"}
 	}
+	if c.SessionIdleTimeout != nil && *c.SessionIdleTimeout < 0 {
+		return &ConfigError{Field: "session_idle_timeout", Message: "must not be negative"}
+	}
 
 	if len(c.ZrokShareAccessGrants()) > 0 {
 		if !c.ZrokShareEnabled() {
@@ -127,6 +133,15 @@ func (c *Config) validate(hasLocalListener bool) error {
 	}
 
 	return nil
+}
+
+// EffectiveSessionIdleTimeout returns the configured Streamable HTTP idle
+// timeout, applying the default when it is unset.
+func (c *Config) EffectiveSessionIdleTimeout() time.Duration {
+	if c == nil || c.SessionIdleTimeout == nil {
+		return DefaultSessionIdleTimeout
+	}
+	return *c.SessionIdleTimeout
 }
 
 // toAggregatorConfig converts to an aggregator.Config for reuse.

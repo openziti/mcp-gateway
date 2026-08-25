@@ -181,33 +181,17 @@ func (cs *ClientSession) connectStdioBackend(ctx context.Context, cfg aggregator
 	}, nil
 }
 
-// connectZrokBackend creates a zrok access and connects via SSE.
+// connectZrokBackend creates a zrok access and connects using the configured MCP protocol.
 func (cs *ClientSession) connectZrokBackend(ctx context.Context, cfg aggregator.BackendConfig) (*sessionBackend, error) {
 	access, err := tools.NewAccess(cfg.Transport.ShareToken)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create zrok access: %w", err)
 	}
 
-	mcpClient := mcp.NewClient(
-		&mcp.Implementation{
-			Name:    cs.config.Aggregator.Name,
-			Version: cs.config.Aggregator.Version,
-		},
-		nil,
-	)
-
-	// create SSE transport using zrok HTTP client
-	sseTransport := &mcp.SSEClientTransport{
-		// the host doesn't matter for routing since zrok handles it
-		Endpoint:   "http://mcp-backend/sse",
-		HTTPClient: access.HTTPClient(),
-	}
-
-	// bound the initial connect window without attaching the timeout to the
-	// long-lived session itself.
-	session, err := aggregator.ConnectWithTimeout(ctx, cs.config.Aggregator.Connection.ConnectTimeout, func(connectCtx context.Context) (*mcp.ClientSession, error) {
-		return mcpClient.Connect(connectCtx, sseTransport, nil)
-	})
+	connected, err := aggregator.ConnectOverlayClientSession(ctx, &mcp.Implementation{
+		Name:    cs.config.Aggregator.Name,
+		Version: cs.config.Aggregator.Version,
+	}, cfg.Transport, access.HTTPClient(), cs.config.Aggregator.Connection.ConnectTimeout)
 	if err != nil {
 		access.Close()
 		return nil, fmt.Errorf("failed to connect to zrok backend: %w", err)
@@ -216,13 +200,13 @@ func (cs *ClientSession) connectZrokBackend(ctx context.Context, cfg aggregator.
 	return &sessionBackend{
 		id:      cfg.ID,
 		cfg:     cfg,
-		client:  mcpClient,
-		session: session,
+		client:  connected.Client,
+		session: connected.Session,
 		access:  access,
 	}, nil
 }
 
-// connectAgoraBackend creates an Agora-backed SSE connection, dialing the
+// connectAgoraBackend creates an Agora-backed MCP connection, dialing the
 // backend's tunnel directly through the startup-attached shared HTTP client.
 func (cs *ClientSession) connectAgoraBackend(ctx context.Context, cfg aggregator.BackendConfig) (*sessionBackend, error) {
 	if cs.agoraDial == nil {
@@ -237,23 +221,10 @@ func (cs *ClientSession) connectAgoraBackend(ctx context.Context, cfg aggregator
 		return nil, fmt.Errorf("agora dial client for backend '%s': %w", cfg.ID, err)
 	}
 
-	mcpClient := mcp.NewClient(
-		&mcp.Implementation{
-			Name:    cs.config.Aggregator.Name,
-			Version: cs.config.Aggregator.Version,
-		},
-		nil,
-	)
-
-	sseTransport := &mcp.SSEClientTransport{
-		// the host doesn't matter for routing since agora handles it
-		Endpoint:   "http://mcp-backend/sse",
-		HTTPClient: httpClient,
-	}
-
-	session, err := aggregator.ConnectWithTimeout(ctx, cs.config.Aggregator.Connection.ConnectTimeout, func(connectCtx context.Context) (*mcp.ClientSession, error) {
-		return mcpClient.Connect(connectCtx, sseTransport, nil)
-	})
+	connected, err := aggregator.ConnectOverlayClientSession(ctx, &mcp.Implementation{
+		Name:    cs.config.Aggregator.Name,
+		Version: cs.config.Aggregator.Version,
+	}, cfg.Transport, httpClient, cs.config.Aggregator.Connection.ConnectTimeout)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to agora backend: %w", err)
 	}
@@ -261,8 +232,8 @@ func (cs *ClientSession) connectAgoraBackend(ctx context.Context, cfg aggregator
 	return &sessionBackend{
 		id:      cfg.ID,
 		cfg:     cfg,
-		client:  mcpClient,
-		session: session,
+		client:  connected.Client,
+		session: connected.Session,
 	}, nil
 }
 

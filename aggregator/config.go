@@ -69,7 +69,7 @@ type TransportConfig struct {
 	AgoraTunnel string
 	// http(s) transport fields
 	Endpoint              string
-	Protocol              string // "sse" (default) or "streamable"
+	Protocol              string // "streamable" (default) or "sse"
 	Headers               map[string]string
 	AllowInsecure         bool
 	AllowEnvironmentProxy bool
@@ -164,6 +164,9 @@ func (c *Config) Validate() error {
 					Field:   fmt.Sprintf("backends[%d].transport.share_token", i),
 					Message: "share_token is required for zrok transport",
 				}
+			}
+			if err := validateMCPProtocol(b.Transport, i); err != nil {
+				return err
 			}
 			if err := rejectHTTPBehaviorOptIns(b.Transport, i); err != nil {
 				return err
@@ -269,7 +272,7 @@ func validateAgoraTransport(transport TransportConfig, index int) error {
 	}
 
 	if transport.Command != "" || len(transport.Args) > 0 || len(transport.Env) > 0 || transport.WorkingDir != "" ||
-		transport.ShareToken != "" || transport.Endpoint != "" || transport.Protocol != "" || len(transport.Headers) > 0 ||
+		transport.ShareToken != "" || transport.Endpoint != "" || len(transport.Headers) > 0 ||
 		transport.AllowInsecure || transport.AllowEnvironmentProxy || transport.AllowRedirects || transport.TLS != nil {
 		return &ConfigError{
 			Field:   fmt.Sprintf("backends[%d].transport", index),
@@ -277,7 +280,7 @@ func validateAgoraTransport(transport TransportConfig, index int) error {
 		}
 	}
 
-	return nil
+	return validateMCPProtocol(transport, index)
 }
 
 func validateHTTPTransport(transport TransportConfig, index int) error {
@@ -325,6 +328,10 @@ func validateHTTPTransport(transport TransportConfig, index int) error {
 		}
 	}
 
+	return validateMCPProtocol(transport, index)
+}
+
+func validateMCPProtocol(transport TransportConfig, index int) error {
 	if transport.Protocol != "" && transport.Protocol != "sse" && transport.Protocol != "streamable" {
 		return &ConfigError{
 			Field:   fmt.Sprintf("backends[%d].transport.protocol", index),

@@ -228,6 +228,45 @@ func TestValidateAcceptsAgoraTransport(t *testing.T) {
 	}
 }
 
+func TestValidateAcceptsOverlayProtocols(t *testing.T) {
+	tests := []TransportConfig{
+		{Type: "zrok", ShareToken: "share-token", Protocol: "streamable"},
+		{Type: "zrok", ShareToken: "share-token", Protocol: "sse"},
+		{Type: "agora", AgoraTunnel: "filesystem-relay", Protocol: "streamable"},
+		{Type: "agora", AgoraTunnel: "filesystem-relay", Protocol: "sse"},
+	}
+
+	for _, transport := range tests {
+		t.Run(transport.Type+"-"+transport.Protocol, func(t *testing.T) {
+			cfg := &Config{Backends: []BackendConfig{{ID: "remote", Transport: transport}}}
+			if err := cfg.Validate(); err != nil {
+				t.Fatalf("expected success, got %v", err)
+			}
+		})
+	}
+}
+
+func TestValidateRejectsUnknownOverlayProtocols(t *testing.T) {
+	tests := []TransportConfig{
+		{Type: "zrok", ShareToken: "share-token", Protocol: "unknown"},
+		{Type: "agora", AgoraTunnel: "filesystem-relay", Protocol: "unknown"},
+	}
+
+	for _, transport := range tests {
+		t.Run(transport.Type, func(t *testing.T) {
+			cfg := &Config{Backends: []BackendConfig{{ID: "remote", Transport: transport}}}
+			err := cfg.Validate()
+			configErr, ok := err.(*ConfigError)
+			if !ok {
+				t.Fatalf("expected ConfigError, got %T (%v)", err, err)
+			}
+			if configErr.Field != "backends[0].transport.protocol" {
+				t.Fatalf("field = %q, want protocol field", configErr.Field)
+			}
+		})
+	}
+}
+
 func TestValidateRejectsAgoraTransportWithoutTunnel(t *testing.T) {
 	cfg := &Config{
 		Backends: []BackendConfig{{

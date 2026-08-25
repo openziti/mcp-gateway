@@ -1,6 +1,7 @@
 package aggregator
 
 import (
+	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -10,10 +11,14 @@ import (
 	"errors"
 	"math/big"
 	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 func TestBuildHTTPSClient_AppendsCustomCAToSystemPool(t *testing.T) {
@@ -333,6 +338,99 @@ func TestBuildHTTPClient_RedirectsPreserveHopLimit(t *testing.T) {
 	if err := client.CheckRedirect(redirect, make([]*http.Request, 10)); err == nil {
 		t.Fatal("expected ten-redirect limit")
 	}
+}
+
+func TestBuildMCPTransportDefaultsToStreamable(t *testing.T) {
+	httpClient := &http.Client{}
+	transport, err := BuildMCPTransport(TransportConfig{}, "http://mcp.example/mcp", httpClient)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	streamable, ok := transport.(*mcp.StreamableClientTransport)
+	if !ok {
+		t.Fatalf("transport = %T, want streamable HTTP", transport)
+	}
+	if streamable.Endpoint != "http://mcp.example/mcp" || streamable.HTTPClient != httpClient {
+		t.Fatalf("streamable transport = %#v", streamable)
+	}
+}
+
+func TestBuildMCPTransportHonorsExplicitSSE(t *testing.T) {
+	httpClient := &http.Client{}
+	transport, err := BuildMCPTransport(TransportConfig{Protocol: "sse"}, "http://mcp.example/sse", httpClient)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	sse, ok := transport.(*mcp.SSEClientTransport)
+	if !ok {
+		t.Fatalf("transport = %T, want SSE", transport)
+	}
+	if sse.Endpoint != "http://mcp.example/sse" || sse.HTTPClient != httpClient {
+		t.Fatalf("SSE transport = %#v", sse)
+	}
+}
+
+func TestConnectOverlayClientSessionHonorsDefaultAndExplicitProtocols(t *testing.T) {
+	server := mcp.NewServer(&mcp.Implementation{Name: "overlay-test", Version: "1.0.0"}, nil)
+	server.AddTool(&mcp.Tool{Name: "ping", InputSchema: map[string]any{"type": "object"}}, nil)
+
+	mux := http.NewServeMux()
+	mux.Handle("/sse", mcp.NewSSEHandler(func(*http.Request) *mcp.Server { return server }, nil))
+	mux.Handle("/", mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return server }, nil))
+	httpServer := httptest.NewServer(mux)
+	t.Cleanup(httpServer.Close)
+
+	target, err := url.Parse(httpServer.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := http.DefaultTransport.(*http.Transport).Clone()
+	base.Proxy = nil
+	httpClient := &http.Client{Transport: rewriteOriginRoundTripper{target: target, base: base}}
+
+	for _, protocol := range []string{"", "streamable", "sse"} {
+		name := protocol
+		if name == "" {
+			name = "default"
+		}
+		t.Run(name, func(t *testing.T) {
+			session, err := ConnectOverlayClientSession(
+				context.Background(),
+				&mcp.Implementation{Name: "overlay-client", Version: "1.0.0"},
+				TransportConfig{Protocol: protocol},
+				httpClient,
+				5*time.Second,
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer session.Session.Close()
+
+			tools, err := session.Session.ListTools(context.Background(), nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(tools.Tools) != 1 || tools.Tools[0].Name != "ping" {
+				t.Fatalf("tools = %#v", tools.Tools)
+			}
+		})
+	}
+}
+
+type rewriteOriginRoundTripper struct {
+	target *url.URL
+	base   http.RoundTripper
+}
+
+func (r rewriteOriginRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	clone := req.Clone(req.Context())
+	requestURL := *req.URL
+	requestURL.Scheme = r.target.Scheme
+	requestURL.Host = r.target.Host
+	clone.URL = &requestURL
+	return r.base.RoundTrip(clone)
 }
 
 func newTestCert(t *testing.T, commonName string) ([]byte, *x509.Certificate) {

@@ -1,9 +1,11 @@
 package gateway
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/openziti/mcp-gateway/aggregator"
 	mcpagora "github.com/openziti/mcp-gateway/agora"
@@ -13,6 +15,66 @@ func TestDefaultConfigEnablesZrokShare(t *testing.T) {
 	cfg := DefaultConfig()
 	if !cfg.ZrokShareEnabled() {
 		t.Fatalf("expected zrok share to default enabled: %#v", cfg.Zrok)
+	}
+}
+
+func TestSessionIdleTimeoutDefaultsAndOverrides(t *testing.T) {
+	cfg := validTestConfig()
+	if got := cfg.EffectiveSessionIdleTimeout(); got != DefaultSessionIdleTimeout {
+		t.Fatalf("default session idle timeout = %s, want %s", got, DefaultSessionIdleTimeout)
+	}
+
+	override := 45 * time.Minute
+	cfg.SessionIdleTimeout = &override
+	if got := cfg.EffectiveSessionIdleTimeout(); got != 45*time.Minute {
+		t.Fatalf("configured session idle timeout = %s, want 45m", got)
+	}
+
+	disabled := time.Duration(0)
+	cfg.SessionIdleTimeout = &disabled
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("explicit zero timeout was rejected: %v", err)
+	}
+	if got := cfg.EffectiveSessionIdleTimeout(); got != 0 {
+		t.Fatalf("explicit zero timeout = %s, want disabled", got)
+	}
+
+	negative := -time.Second
+	cfg.SessionIdleTimeout = &negative
+	err := cfg.Validate()
+	configErr, ok := err.(*ConfigError)
+	if !ok || configErr.Field != "session_idle_timeout" {
+		t.Fatalf("negative timeout error = %#v, want session_idle_timeout ConfigError", err)
+	}
+}
+
+func TestLoadConfigRawSessionIdleTimeout(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "gateway.yml")
+	if err := os.WriteFile(path, []byte("session_idle_timeout: 45m\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadConfigRaw(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := cfg.EffectiveSessionIdleTimeout(); got != 45*time.Minute {
+		t.Fatalf("loaded session idle timeout = %s, want 45m", got)
+	}
+
+	zeroPath := filepath.Join(t.TempDir(), "gateway-zero.yml")
+	if err := os.WriteFile(zeroPath, []byte("session_idle_timeout: 0\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	zeroCfg, err := LoadConfigRaw(zeroPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if zeroCfg.SessionIdleTimeout == nil || zeroCfg.EffectiveSessionIdleTimeout() != 0 {
+		t.Fatalf("explicit zero timeout was not preserved: %#v", zeroCfg.SessionIdleTimeout)
+	}
+
+	if got := (&Config{}).EffectiveSessionIdleTimeout(); got != DefaultSessionIdleTimeout {
+		t.Fatalf("unset programmatic timeout = %s, want %s", got, DefaultSessionIdleTimeout)
 	}
 }
 

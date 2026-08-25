@@ -5,9 +5,11 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	mcpagora "github.com/openziti/mcp-gateway/agora"
 	"github.com/openziti/mcp-gateway/bridge"
+	"github.com/openziti/mcp-gateway/gateway"
 )
 
 type fakeBridgeRunner struct {
@@ -37,7 +39,7 @@ func (f *fakeBridgeRunner) Stop() error {
 func TestRunStopsBridgeOnRunError(t *testing.T) {
 	origFactory := newBridgeRunner
 	origEnv, origWorkingDir, origShareToken, origAccessGrants := env, workingDir, shareToken, accessGrants
-	origNetwork, origIntegrationFile := network, agoraIntegrationFile
+	origNetwork, origIntegrationFile, origSessionIdleTimeout := network, agoraIntegrationFile, sessionIdleTimeout
 	defer func() {
 		newBridgeRunner = origFactory
 		env = origEnv
@@ -46,6 +48,7 @@ func TestRunStopsBridgeOnRunError(t *testing.T) {
 		accessGrants = origAccessGrants
 		network = origNetwork
 		agoraIntegrationFile = origIntegrationFile
+		sessionIdleTimeout = origSessionIdleTimeout
 	}()
 
 	var gotCfg *bridge.Config
@@ -60,6 +63,7 @@ func TestRunStopsBridgeOnRunError(t *testing.T) {
 	shareToken = "managed-share"
 	network = ""
 	agoraIntegrationFile = ""
+	sessionIdleTimeout = 45 * time.Minute
 
 	err := run(nil, []string{"backend", "arg1"})
 	if err == nil || !strings.Contains(err.Error(), "serve failed") {
@@ -73,6 +77,9 @@ func TestRunStopsBridgeOnRunError(t *testing.T) {
 	}
 	if gotCfg.Env["FOO"] != "bar" || gotCfg.WorkingDir != "/tmp/work" || gotCfg.ShareToken != "managed-share" {
 		t.Fatalf("unexpected config fields: %+v", gotCfg)
+	}
+	if gotCfg.SessionIdleTimeout == nil || *gotCfg.SessionIdleTimeout != 45*time.Minute {
+		t.Fatalf("session idle timeout = %#v, want 45m", gotCfg.SessionIdleTimeout)
 	}
 }
 
@@ -91,6 +98,26 @@ func TestRunReturnsStopErrorOnCleanShutdown(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "stop failed") {
 		t.Fatalf("expected stop error, got %v", err)
 	}
+}
+
+func TestRunPreservesExplicitZeroSessionIdleTimeout(t *testing.T) {
+	origFactory := newBridgeRunner
+	defer func() { newBridgeRunner = origFactory }()
+
+	withBridgeGlobals(t, func() {
+		sessionIdleTimeout = 0
+		fake := &fakeBridgeRunner{}
+		newBridgeRunner = func(cfg *bridge.Config) (bridgeRunner, error) {
+			if cfg.SessionIdleTimeout == nil || *cfg.SessionIdleTimeout != 0 {
+				t.Fatalf("explicit zero timeout was not preserved: %#v", cfg.SessionIdleTimeout)
+			}
+			return fake, nil
+		}
+
+		if err := run(nil, []string{"backend"}); err != nil {
+			t.Fatal(err)
+		}
+	})
 }
 
 func TestApplyOverridesRejectsInvalidNetwork(t *testing.T) {
@@ -261,7 +288,7 @@ func TestApplyOverridesPreservesExistingAgoraFields(t *testing.T) {
 func withBridgeGlobals(t *testing.T, fn func()) {
 	t.Helper()
 	origEnv, origWorkingDir, origShareToken, origAccessGrants := env, workingDir, shareToken, accessGrants
-	origNetwork, origTunnel, origIntegrationFile := network, agoraTunnel, agoraIntegrationFile
+	origNetwork, origTunnel, origIntegrationFile, origSessionIdleTimeout := network, agoraTunnel, agoraIntegrationFile, sessionIdleTimeout
 	defer func() {
 		env = origEnv
 		workingDir = origWorkingDir
@@ -270,6 +297,7 @@ func withBridgeGlobals(t *testing.T, fn func()) {
 		network = origNetwork
 		agoraTunnel = origTunnel
 		agoraIntegrationFile = origIntegrationFile
+		sessionIdleTimeout = origSessionIdleTimeout
 	}()
 
 	env = nil
@@ -279,5 +307,6 @@ func withBridgeGlobals(t *testing.T, fn func()) {
 	network = ""
 	agoraTunnel = ""
 	agoraIntegrationFile = ""
+	sessionIdleTimeout = gateway.DefaultSessionIdleTimeout
 	fn()
 }
