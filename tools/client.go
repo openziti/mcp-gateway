@@ -115,11 +115,7 @@ func (c *Client) buildTransport(ctx context.Context) (mcp.Transport, error) {
 			c.closeTransport()
 			return nil, fmt.Errorf("failed to dial agora tunnel: %w", err)
 		}
-		return &mcp.SSEClientTransport{
-			// the host doesn't matter for routing since agora handles it
-			Endpoint:   "http://mcp-backend/sse",
-			HTTPClient: httpClient,
-		}, nil
+		return newFabricMCPTransport(httpClient), nil
 	}
 
 	dl.Log().With("share_token", c.shareToken).Debug("creating zrok access")
@@ -128,11 +124,15 @@ func (c *Client) buildTransport(ctx context.Context) (mcp.Transport, error) {
 		return nil, fmt.Errorf("failed to create access: %w", err)
 	}
 	c.access = access
-	return &mcp.SSEClientTransport{
-		// the host doesn't matter for routing since zrok handles it
-		Endpoint:   "http://mcp-backend/sse",
-		HTTPClient: access.HTTPClient(),
-	}, nil
+	return newFabricMCPTransport(access.HTTPClient()), nil
+}
+
+func newFabricMCPTransport(httpClient *http.Client) mcp.Transport {
+	return &mcp.StreamableClientTransport{
+		// the host does not matter for routing through zrok or Agora.
+		Endpoint:   "http://mcp-backend",
+		HTTPClient: httpClient,
+	}
 }
 
 func newAgoraClient(cfg *mcpagora.Config) (*mcpagora.Client, error) {

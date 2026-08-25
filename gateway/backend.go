@@ -36,7 +36,7 @@ type Backend struct {
 	ipcClient      *ipc.Client
 	ipcCancel      context.CancelFunc
 	mainCtx        context.Context // stored for reconnection callback
-	streamable     streamableSessionTracker
+	streamable     StreamableSessions
 }
 
 // New creates a Backend from config.
@@ -148,7 +148,7 @@ func (b *Backend) Start(ctx context.Context) (err error) {
 		b.httpServer = &http.Server{Handler: handler}
 	}
 	if b.localListener != nil {
-		b.localServer = &http.Server{Handler: b.createStreamableHTTPHandler()}
+		b.localServer = &http.Server{Handler: handler}
 	}
 
 	if b.config.AgoraServeEnabled() {
@@ -268,115 +268,16 @@ func (b *Backend) discoverTools(ctx context.Context, agoraDial aggregator.AgoraD
 	return namespace, policies, nil
 }
 
-// createHTTPHandler creates an HTTP handler that spawns per-client sessions.
+// createHTTPHandler creates a streamable HTTP handler that spawns per-client sessions.
 func (b *Backend) createHTTPHandler() http.Handler {
-	return mcp.NewSSEHandler(func(r *http.Request) *mcp.Server {
-		server, cleanup := b.createMCPServer(r, true)
-		if server != nil {
-			go func() {
-				<-r.Context().Done()
-				cleanup()
-			}()
-		}
-		return server
-	}, nil)
-}
-
-// createStreamableHTTPHandler is used only by the caller-provided listener.
-// fabric listeners retain the gateway's established SSE wire surface.
-func (b *Backend) createStreamableHTTPHandler() http.Handler {
-	created := sync.Map{}
-	handler := mcp.NewStreamableHTTPHandler(func(r *http.Request) *mcp.Server {
-		server, cleanup := b.createMCPServer(r, false)
-		if server != nil {
-			created.Store(r, streamableLifecycle{server: server, cleanup: cleanup})
-		}
-		return server
-	}, nil)
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		handler.ServeHTTP(w, r)
-		value, ok := created.LoadAndDelete(r)
-		if !ok {
-			return
-		}
-		lifecycle := value.(streamableLifecycle)
-		var protocolSession *mcp.ServerSession
-		for session := range lifecycle.server.Sessions() {
-			protocolSession = session
-			break
-		}
-		if protocolSession == nil {
-			// the SDK closes a protocol session whose initialization failed
-			// before ServeHTTP returns; release its dedicated backends too.
-			lifecycle.cleanup()
-			return
-		}
-		b.streamable.add(protocolSession)
-		go func() {
-			_ = protocolSession.Wait()
-			b.streamable.remove(protocolSession)
-			lifecycle.cleanup()
-		}()
+	return b.streamable.Handler(b.config.EffectiveSessionIdleTimeout(), func(r *http.Request) (*mcp.Server, func()) {
+		return b.createMCPServer(r)
 	})
 }
 
-type streamableLifecycle struct {
-	server  *mcp.Server
-	cleanup func()
-}
-
-type streamableSessionTracker struct {
-	mu       sync.Mutex
-	sessions map[*mcp.ServerSession]struct{}
-	closing  bool
-}
-
-func (t *streamableSessionTracker) add(session *mcp.ServerSession) {
-	t.mu.Lock()
-	if t.closing {
-		t.mu.Unlock()
-		_ = session.Close()
-		return
-	}
-	if t.sessions == nil {
-		t.sessions = make(map[*mcp.ServerSession]struct{})
-	}
-	t.sessions[session] = struct{}{}
-	t.mu.Unlock()
-}
-
-func (t *streamableSessionTracker) remove(session *mcp.ServerSession) {
-	t.mu.Lock()
-	delete(t.sessions, session)
-	t.mu.Unlock()
-}
-
-func (t *streamableSessionTracker) close() error {
-	t.mu.Lock()
-	t.closing = true
-	sessions := make([]*mcp.ServerSession, 0, len(t.sessions))
-	for session := range t.sessions {
-		sessions = append(sessions, session)
-	}
-	t.sessions = nil
-	t.mu.Unlock()
-
-	var errs []error
-	for _, session := range sessions {
-		if err := session.Close(); err != nil {
-			errs = append(errs, err)
-		}
-	}
-	return errors.Join(errs...)
-}
-
-func (b *Backend) createMCPServer(r *http.Request, useRequestContext bool) (*mcp.Server, func()) {
+func (b *Backend) createMCPServer(r *http.Request) (*mcp.Server, func()) {
 	client := NewClientContext(r)
-	sessionCtx := r.Context()
-	if !useRequestContext {
-		sessionCtx = b.mainCtx
-	}
-	session, err := b.sessionFactory.CreateSession(sessionCtx, client)
+	session, err := b.sessionFactory.CreateSession(b.mainCtx, client)
 	if err != nil {
 		dl.Log().With("error", err).Error("failed to create client session")
 		return nil, func() {}
@@ -431,13 +332,13 @@ func (b *Backend) Run(ctx context.Context) error {
 
 	if b.agoraSubsystem != nil && b.config.AgoraPublishEnabled() {
 		if err := b.agoraSubsystem.StartPublishing(ctx); err != nil {
-			_ = b.streamable.close()
+			_ = b.streamable.Close()
 			_ = shutdownHTTPServers(servers)
 			return err
 		}
 	}
 	shutdown := func() error {
-		return errors.Join(b.streamable.close(), shutdownHTTPServers(servers))
+		return errors.Join(b.streamable.Close(), shutdownHTTPServers(servers))
 	}
 
 	// wait for context cancellation or server error
@@ -466,7 +367,7 @@ func (b *Backend) Stop() error {
 		b.ipcCancel()
 	}
 
-	if err := b.streamable.close(); err != nil {
+	if err := b.streamable.Close(); err != nil {
 		dl.Log().With("error", err).Warn("error closing streamable sessions")
 		lastErr = err
 	}

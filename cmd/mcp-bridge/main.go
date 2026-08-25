@@ -8,10 +8,12 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/michaelquigley/df/dl"
 	mcpagora "github.com/openziti/mcp-gateway/agora"
 	"github.com/openziti/mcp-gateway/bridge"
+	"github.com/openziti/mcp-gateway/gateway"
 	"github.com/spf13/cobra"
 )
 
@@ -23,6 +25,7 @@ var (
 	network              string
 	agoraTunnel          string
 	agoraIntegrationFile string
+	sessionIdleTimeout   time.Duration
 )
 
 var rootCmd = &cobra.Command{
@@ -42,6 +45,7 @@ func init() {
 	rootCmd.Flags().StringVar(&network, "network", "", "network shortcut: zrok or agora")
 	rootCmd.Flags().StringVar(&agoraTunnel, "agora-tunnel", "", "agora tunnel name to serve (bind if it exists, else create+delete; default: instance name)")
 	rootCmd.Flags().StringVar(&agoraIntegrationFile, "agora-integration-file", "", "path to Agora integration file (overrides config)")
+	rootCmd.Flags().DurationVar(&sessionIdleTimeout, "session-idle-timeout", gateway.DefaultSessionIdleTimeout, "close Streamable HTTP sessions after this much inactivity (0 disables)")
 }
 
 type bridgeRunner interface {
@@ -72,11 +76,12 @@ func run(_ *cobra.Command, args []string) (retErr error) {
 	}
 
 	cfg := &bridge.Config{
-		Command:    command,
-		Args:       args[1:],
-		Env:        envMap,
-		WorkingDir: workingDir,
-		ShareToken: shareToken,
+		Command:            command,
+		Args:               args[1:],
+		Env:                envMap,
+		WorkingDir:         workingDir,
+		ShareToken:         shareToken,
+		SessionIdleTimeout: durationPtr(sessionIdleTimeout),
 	}
 
 	if err := applyOverrides(cfg); err != nil {
@@ -109,6 +114,10 @@ func run(_ *cobra.Command, args []string) (retErr error) {
 	}
 
 	return nil
+}
+
+func durationPtr(value time.Duration) *time.Duration {
+	return &value
 }
 
 func applyOverrides(cfg *bridge.Config) error {

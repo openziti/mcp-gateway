@@ -3,8 +3,10 @@ package bridge
 import (
 	"strings"
 	"testing"
+	"time"
 
 	mcpagora "github.com/openziti/mcp-gateway/agora"
+	"github.com/openziti/mcp-gateway/gateway"
 )
 
 func TestValidateDefaultsToZrokShare(t *testing.T) {
@@ -14,6 +16,35 @@ func TestValidateDefaultsToZrokShare(t *testing.T) {
 	}
 	if !cfg.ZrokShareEnabled() {
 		t.Fatal("expected zrok share to default enabled")
+	}
+	if got := cfg.EffectiveSessionIdleTimeout(); got != gateway.DefaultSessionIdleTimeout {
+		t.Fatalf("session idle timeout = %s, want %s", got, gateway.DefaultSessionIdleTimeout)
+	}
+}
+
+func TestValidateSessionIdleTimeout(t *testing.T) {
+	override := 45 * time.Minute
+	cfg := &Config{Command: "backend", SessionIdleTimeout: &override}
+	if err := cfg.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if got := cfg.EffectiveSessionIdleTimeout(); got != 45*time.Minute {
+		t.Fatalf("session idle timeout = %s, want 45m", got)
+	}
+
+	disabled := time.Duration(0)
+	cfg.SessionIdleTimeout = &disabled
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("explicit zero timeout was rejected: %v", err)
+	}
+	if got := cfg.EffectiveSessionIdleTimeout(); got != 0 {
+		t.Fatalf("explicit zero timeout = %s, want disabled", got)
+	}
+
+	negative := -time.Second
+	cfg.SessionIdleTimeout = &negative
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "session idle timeout") {
+		t.Fatalf("expected negative timeout validation error, got %v", err)
 	}
 }
 

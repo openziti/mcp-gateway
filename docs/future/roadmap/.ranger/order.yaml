@@ -1,5 +1,8 @@
 inbox:
   - agora-serve-resilience.md
   - cross-org-dial-policy.md
+  - integration-file-environment-precedence.md
   - runtime-backend-add-and-remove.md
   - unify-mcp-tools-transport-paths.md
+researching:
+  - token-output-shares-stdout-with-logs.md

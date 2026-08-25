@@ -44,6 +44,11 @@
 # network serving configuration (optional)
 # ------------------------------------------------------------------------------
 
+# close inactive Streamable HTTP sessions and their dedicated backend resources
+# use a Go duration such as 10m or 1h; 0 disables idle expiry
+# disabling expiry can retain backend resources when a client disappears
+session_idle_timeout: 30m
+
 # zrok sharing is enabled by default. set enabled: false for agora-only gateways.
 #zrok:
 #  share:
@@ -196,6 +201,10 @@ backends:
   #    # share token from mcp-bridge output
   #    share_token: "xyz789abc"
   #
+  #    # Streamable HTTP is the default; set protocol: "sse" only when the
+  #    # remote share exposes a legacy SSE endpoint
+  #    #protocol: "sse"
+  #
   #  # tool filtering works the same for remote backends
   #  tools:
   #    mode: "allow"
@@ -216,13 +225,17 @@ backends:
   #    # tunnel name exposed by the remote Agora service
   #    agora_tunnel: "filesystem-relay"
   #
+  #    # Streamable HTTP is the default; set protocol: "sse" only when the
+  #    # remote tunnel exposes a legacy SSE endpoint
+  #    #protocol: "sse"
+  #
   #  tools:
   #    mode: "allow"
   #    list:
   #      - "*"
 
   # ------------------------------------------------------------------------------
-  # example: remote HTTPS backend (SSE transport, default)
+  # example: remote HTTPS backend (Streamable HTTP transport, default)
   # ------------------------------------------------------------------------------
   #- id: "remote-api"
   #  name: "Remote MCP API"
@@ -232,12 +245,10 @@ backends:
   #    type: "https"
   #
   #    # full URL of the MCP server endpoint
-  #    endpoint: "https://mcp.example.com/sse"
+  #    endpoint: "https://mcp.example.com/mcp"
   #
-  #    # protocol: "sse" (default) or "streamable"
-  #    # sse: legacy SSE transport (most common)
-  #    # streamable: newer streamable HTTP transport
-  #    #protocol: "sse"
+  #    # protocol: "streamable" (default) or "sse"
+  #    # set protocol: "sse" explicitly for a legacy SSE endpoint
   #
   #    # custom headers sent with every request (e.g., auth tokens)
   #    headers:
@@ -249,13 +260,13 @@ backends:
   #      - "*"
 
   # ------------------------------------------------------------------------------
-  # example: remote HTTPS backend (streamable HTTP transport)
+  # example: remote HTTPS backend (legacy SSE transport)
   # ------------------------------------------------------------------------------
-  #- id: "streamable-api"
+  #- id: "legacy-api"
   #  transport:
   #    type: "https"
-  #    endpoint: "https://mcp.internal.corp/mcp"
-  #    protocol: "streamable"
+  #    endpoint: "https://mcp.internal.corp/sse"
+  #    protocol: "sse"
   #    headers:
   #      Authorization: "Bearer sk-xyz789"
   #
@@ -270,7 +281,7 @@ backends:
   #- id: "dev-server"
   #  transport:
   #    type: "https"
-  #    endpoint: "https://localhost:8443/sse"
+  #    endpoint: "https://localhost:8443/mcp"
   #    tls:
   #      # skip TLS certificate verification (development only!)
   #      insecure_skip_verify: true
@@ -284,7 +295,7 @@ backends:
   #    type: "http"
   #
   #    # full URL of the MCP server endpoint
-  #    endpoint: "http://localhost:8080/sse"
+  #    endpoint: "http://localhost:8080/mcp"
   #
   #    # plaintext HTTP requires explicit opt-in
   #    allow_insecure: true

@@ -12,7 +12,6 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/google/uuid"
@@ -34,6 +33,8 @@ type Bridge struct {
 	agoraServer    *http.Server
 	agoraServe     *mcpagora.Serve
 	agoraSubsystem *mcpagora.Subsystem
+	mainCtx        context.Context
+	streamable     gateway.StreamableSessions
 	mu             sync.Mutex
 	sessions       map[string]*bridgeSession
 }
@@ -65,6 +66,7 @@ func New(cfg *Config) (*Bridge, error) {
 // Start discovers tools from a temporary backend, creates network listeners, and outputs tokens.
 func (b *Bridge) Start(ctx context.Context) (err error) {
 	dl.Log().With("command", b.cfg.Command).Info("starting mcp-bridge")
+	b.mainCtx = ctx
 	defer func() {
 		if err != nil {
 			if stopErr := b.Stop(); stopErr != nil {
@@ -185,24 +187,24 @@ func (b *Bridge) discoverTools(ctx context.Context) ([]*mcp.Tool, error) {
 	return toolsResult.Tools, nil
 }
 
-// createHTTPHandler creates an HTTP handler that spawns per-client subprocesses.
+// createHTTPHandler creates a streamable HTTP handler that spawns per-client subprocesses.
 func (b *Bridge) createHTTPHandler() http.Handler {
-	return mcp.NewSSEHandler(func(r *http.Request) *mcp.Server {
-		// spawn new subprocess for this client
-		session, err := b.createBridgeSession(r.Context(), r.RemoteAddr, r.Header.Get("User-Agent"))
+	return b.streamable.Handler(b.cfg.EffectiveSessionIdleTimeout(), func(r *http.Request) (*mcp.Server, func()) {
+		session, err := b.createBridgeSession(b.mainCtx, r.RemoteAddr, r.Header.Get("User-Agent"))
 		if err != nil {
 			dl.Log().With("error", err).Error("failed to create bridge session")
-			return nil
+			return nil, func() {}
 		}
 
-		// cleanup when client disconnects
-		go func() {
-			<-r.Context().Done()
-			b.removeBridgeSession(session.id)
-		}()
+		var cleanupOnce sync.Once
+		cleanup := func() {
+			cleanupOnce.Do(func() {
+				b.removeBridgeSession(session.id)
+			})
+		}
 
-		return session.createProxyServer(b.tools)
-	}, nil)
+		return session.createProxyServer(b.tools), cleanup
+	})
 }
 
 // createHTTPServer creates an HTTP server that spawns per-client subprocesses.
@@ -341,36 +343,14 @@ func (bs *bridgeSession) createProxyHandler(toolName string) mcp.ToolHandler {
 func (bs *bridgeSession) Close() error {
 	var errs []error
 
-	// cancel context
-	bs.cancel()
-
-	// close MCP session
+	// CommandTransport owns graceful subprocess termination: it closes stdin,
+	// waits, then escalates to SIGTERM and SIGKILL on its bounded timers.
 	if bs.session != nil {
 		if err := bs.session.Close(); err != nil {
 			errs = append(errs, fmt.Errorf("closing session: %w", err))
 		}
 	}
-
-	// terminate subprocess with graceful shutdown
-	if bs.cmd != nil && bs.cmd.Process != nil {
-		// send SIGTERM first
-		if err := bs.cmd.Process.Signal(syscall.SIGTERM); err != nil {
-			dl.Log().With("session_id", bs.id).With("error", err).Debug("sigterm failed, trying sigkill")
-			bs.cmd.Process.Kill()
-		} else {
-			// wait for process to exit with timeout
-			done := make(chan error, 1)
-			go func() { done <- bs.cmd.Wait() }()
-
-			select {
-			case <-done:
-				// process exited cleanly
-			case <-time.After(5 * time.Second):
-				dl.Log().With("session_id", bs.id).Debug("process did not exit after sigterm, sending sigkill")
-				bs.cmd.Process.Kill()
-			}
-		}
-	}
+	bs.cancel()
 
 	dl.Log().
 		With("session_id", bs.id).
@@ -406,19 +386,22 @@ func (b *Bridge) Run(ctx context.Context) error {
 
 	if b.agoraSubsystem != nil && b.cfg.AgoraPublishEnabled() {
 		if err := b.agoraSubsystem.StartPublishing(ctx); err != nil {
-			shutdownHTTPServers(servers)
+			_ = b.streamable.Close()
+			_ = shutdownHTTPServers(servers)
 			return err
 		}
+	}
+	shutdown := func() error {
+		return errors.Join(b.streamable.Close(), shutdownHTTPServers(servers))
 	}
 
 	// wait for context cancellation or server error
 	select {
 	case <-ctx.Done():
 		dl.Log().Info("context cancelled, shutting down")
-		return shutdownHTTPServers(servers)
+		return shutdown()
 	case err := <-errCh:
-		shutdownHTTPServers(servers)
-		return err
+		return errors.Join(err, shutdown())
 	}
 }
 
@@ -427,6 +410,11 @@ func (b *Bridge) Stop() error {
 	dl.Log().Info("stopping mcp-bridge")
 
 	var lastErr error
+
+	if err := b.streamable.Close(); err != nil {
+		dl.Log().With("error", err).Warn("error closing streamable sessions")
+		lastErr = err
+	}
 
 	if b.httpServer != nil {
 		if err := b.httpServer.Shutdown(context.Background()); err != nil {
