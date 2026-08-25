@@ -1,6 +1,6 @@
 ---
 title: isolate mcp-tools HTTP backend sessions
-state: inbox
+state: building
 created: 2026-08-25
 tags: [defect]
 ---

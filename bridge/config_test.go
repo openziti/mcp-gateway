@@ -6,7 +6,7 @@ import (
 	"time"
 
 	mcpagora "github.com/openziti/mcp-gateway/agora"
-	"github.com/openziti/mcp-gateway/gateway"
+	"github.com/openziti/mcp-gateway/streamable"
 )
 
 func TestValidateDefaultsToZrokShare(t *testing.T) {
@@ -17,8 +17,8 @@ func TestValidateDefaultsToZrokShare(t *testing.T) {
 	if !cfg.ZrokShareEnabled() {
 		t.Fatal("expected zrok share to default enabled")
 	}
-	if got := cfg.EffectiveSessionIdleTimeout(); got != gateway.DefaultSessionIdleTimeout {
-		t.Fatalf("session idle timeout = %s, want %s", got, gateway.DefaultSessionIdleTimeout)
+	if got := cfg.EffectiveSessionIdleTimeout(); got != streamable.DefaultSessionIdleTimeout {
+		t.Fatalf("session idle timeout = %s, want %s", got, streamable.DefaultSessionIdleTimeout)
 	}
 }
 

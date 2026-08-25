@@ -1,4 +1,8 @@
-package gateway
+// Package streamable owns the server side of the Streamable HTTP session
+// lifecycle shared by mcp-gateway, mcp-bridge, and mcp-tools. each of them
+// creates per-frontend-session backend resources and must release them when
+// the protocol session ends.
+package streamable
 
 import (
 	"errors"
@@ -13,18 +17,31 @@ import (
 // disappears without terminating its Streamable HTTP session.
 const DefaultSessionIdleTimeout = 30 * time.Minute
 
-// StreamableSessions owns the protocol sessions created by a streamable HTTP
-// handler. Streamable sessions outlive the request that initializes them, so
-// callers must close this set during server shutdown.
-type StreamableSessions struct {
+// Sessions owns the protocol sessions created by a streamable HTTP handler.
+// Streamable sessions outlive the request that initializes them, so callers
+// must close this set during server shutdown.
+type Sessions struct {
 	mu       sync.Mutex
 	sessions map[*mcp.ServerSession]struct{}
 	closing  bool
 }
 
+// Options configure the wrapped Streamable HTTP handler.
+type Options struct {
+	// SessionIdleTimeout closes a session that has gone quiet for this long.
+	// zero disables idle expiry.
+	SessionIdleTimeout time.Duration
+	// Stateless serves every request on a throwaway session. the SDK asks for
+	// a server per request and closes it before the request returns, so the
+	// caller's per-session resources are acquired and released per request.
+	Stateless bool
+	// JSONResponse prefers JSON over SSE for responses.
+	JSONResponse bool
+}
+
 // Handler builds a streamable HTTP handler whose per-session resources are
 // released when the MCP protocol session ends.
-func (s *StreamableSessions) Handler(sessionIdleTimeout time.Duration, create func(*http.Request) (*mcp.Server, func())) http.Handler {
+func (s *Sessions) Handler(opts Options, create func(*http.Request) (*mcp.Server, func())) http.Handler {
 	created := sync.Map{}
 	handler := mcp.NewStreamableHTTPHandler(func(r *http.Request) *mcp.Server {
 		server, cleanup := create(r)
@@ -32,7 +49,11 @@ func (s *StreamableSessions) Handler(sessionIdleTimeout time.Duration, create fu
 			created.Store(r, streamableLifecycle{server: server, cleanup: cleanup})
 		}
 		return server
-	}, &mcp.StreamableHTTPOptions{SessionTimeout: sessionIdleTimeout})
+	}, &mcp.StreamableHTTPOptions{
+		SessionTimeout: opts.SessionIdleTimeout,
+		Stateless:      opts.Stateless,
+		JSONResponse:   opts.JSONResponse,
+	})
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		handler.ServeHTTP(w, r)
@@ -68,7 +89,7 @@ type streamableLifecycle struct {
 	cleanup func()
 }
 
-func (s *StreamableSessions) add(session *mcp.ServerSession) {
+func (s *Sessions) add(session *mcp.ServerSession) {
 	s.mu.Lock()
 	if s.closing {
 		s.mu.Unlock()
@@ -82,7 +103,7 @@ func (s *StreamableSessions) add(session *mcp.ServerSession) {
 	s.mu.Unlock()
 }
 
-func (s *StreamableSessions) remove(session *mcp.ServerSession) {
+func (s *Sessions) remove(session *mcp.ServerSession) {
 	s.mu.Lock()
 	delete(s.sessions, session)
 	s.mu.Unlock()
@@ -90,7 +111,7 @@ func (s *StreamableSessions) remove(session *mcp.ServerSession) {
 
 // Close prevents new sessions from surviving registration and closes every
 // protocol session currently owned by the set.
-func (s *StreamableSessions) Close() error {
+func (s *Sessions) Close() error {
 	s.mu.Lock()
 	s.closing = true
 	sessions := make([]*mcp.ServerSession, 0, len(s.sessions))

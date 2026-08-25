@@ -9,6 +9,7 @@ import (
 
 	"github.com/openziti/mcp-gateway/aggregator"
 	mcpagora "github.com/openziti/mcp-gateway/agora"
+	"github.com/openziti/mcp-gateway/streamable"
 )
 
 func TestDefaultConfigEnablesZrokShare(t *testing.T) {
@@ -20,8 +21,8 @@ func TestDefaultConfigEnablesZrokShare(t *testing.T) {
 
 func TestSessionIdleTimeoutDefaultsAndOverrides(t *testing.T) {
 	cfg := validTestConfig()
-	if got := cfg.EffectiveSessionIdleTimeout(); got != DefaultSessionIdleTimeout {
-		t.Fatalf("default session idle timeout = %s, want %s", got, DefaultSessionIdleTimeout)
+	if got := cfg.EffectiveSessionIdleTimeout(); got != streamable.DefaultSessionIdleTimeout {
+		t.Fatalf("default session idle timeout = %s, want %s", got, streamable.DefaultSessionIdleTimeout)
 	}
 
 	override := 45 * time.Minute
@@ -73,8 +74,8 @@ func TestLoadConfigRawSessionIdleTimeout(t *testing.T) {
 		t.Fatalf("explicit zero timeout was not preserved: %#v", zeroCfg.SessionIdleTimeout)
 	}
 
-	if got := (&Config{}).EffectiveSessionIdleTimeout(); got != DefaultSessionIdleTimeout {
-		t.Fatalf("unset programmatic timeout = %s, want %s", got, DefaultSessionIdleTimeout)
+	if got := (&Config{}).EffectiveSessionIdleTimeout(); got != streamable.DefaultSessionIdleTimeout {
+		t.Fatalf("unset programmatic timeout = %s, want %s", got, streamable.DefaultSessionIdleTimeout)
 	}
 }
 

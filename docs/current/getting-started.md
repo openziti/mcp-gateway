@@ -454,6 +454,9 @@ Options:
 - `--bind` — address to listen on (default: `127.0.0.1:8080`)
 - `--stateless` — stateless mode, no session persistence
 - `--json-response` — prefer JSON responses over streamed responses
+- `--session-idle-timeout <duration>` — close inactive local sessions after this long (default `30m`, `0` disables)
+
+Several clients can share one `mcp-tools http` process. Each gets its own session on the remote share, so their backend state stays separate — the same isolation they would get connecting to the gateway directly.
 
 **n8n example:**
 

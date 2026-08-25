@@ -36,6 +36,8 @@ These are the ones that earn the suite its keep. A Streamable HTTP session outli
 | `TestBridgeReleasesSubprocessOnClientDisconnect` | a client that disconnects cleanly releases its dedicated subprocess, and the bridge still serves the next client |
 | `TestBridgeIdleTimeoutReleasesAbandonedSubprocess` | a client killed outright — never terminating its session — is reclaimed by `--session-idle-timeout` |
 | `TestGatewayReleasesBackendsOnClientDisconnect` | a gateway client session releases its dedicated connection to *every* backend |
+| `TestGatewayReleasesChainedBridgeOnClientDisconnect` | a gateway client leaving releases the *downstream bridge's* subprocess — the fabric-backed backend path, which stdio backends cannot exercise |
+| `TestToolsHTTPIsolatesBackendSessions` | two agents behind one `mcp-tools http` get two gateway sessions, not one, and either can leave without disturbing the other |
 
 Every scenario that creates an ephemeral share or tunnel also asserts, after shutdown, that the fabric resource is gone.
 

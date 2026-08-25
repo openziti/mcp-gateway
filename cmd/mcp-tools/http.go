@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/michaelquigley/df/dl"
+	"github.com/openziti/mcp-gateway/streamable"
 	"github.com/openziti/mcp-gateway/tools"
 	"github.com/spf13/cobra"
 )
@@ -22,6 +24,7 @@ type httpCommand struct {
 	agoraIntegrationFile string
 	stateless            bool
 	jsonResponse         bool
+	sessionIdleTimeout   time.Duration
 	cmd                  *cobra.Command
 }
 
@@ -37,11 +40,19 @@ func newHTTPCommand() *httpCommand {
 	cmd.Flags().StringVar(&command.agoraIntegrationFile, "agora-integration-file", "", "path to Agora integration file")
 	cmd.Flags().BoolVar(&command.stateless, "stateless", false, "run in stateless mode")
 	cmd.Flags().BoolVar(&command.jsonResponse, "json-response", false, "prefer json responses over sse")
+	cmd.Flags().DurationVar(&command.sessionIdleTimeout, "session-idle-timeout", streamable.DefaultSessionIdleTimeout, "close Streamable HTTP sessions after this much inactivity (0 disables)")
 	cmd.RunE = command.run
 	return command
 }
 
 func (cmd *httpCommand) run(_ *cobra.Command, args []string) (retErr error) {
+	// a negative duration reaches the SDK as "never expire", which is the
+	// opposite of the documented zero opt-out. gateway and bridge already
+	// refuse it.
+	if cmd.sessionIdleTimeout < 0 {
+		return fmt.Errorf("session idle timeout must not be negative")
+	}
+
 	target, err := resolveToolsTarget(args, cmd.agoraTunnel, cmd.agoraIntegrationFile)
 	if err != nil {
 		return err
@@ -69,9 +80,10 @@ func (cmd *httpCommand) run(_ *cobra.Command, args []string) (retErr error) {
 	}()
 
 	opts := &tools.HTTPOptions{
-		Address:      cmd.bind,
-		Stateless:    cmd.stateless,
-		JSONResponse: cmd.jsonResponse,
+		Address:            cmd.bind,
+		Stateless:          cmd.stateless,
+		JSONResponse:       cmd.jsonResponse,
+		SessionIdleTimeout: &cmd.sessionIdleTimeout,
 	}
 
 	dl.Log().With("bind", cmd.bind).Info("starting http server")
