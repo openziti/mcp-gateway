@@ -4,3 +4,5 @@ inbox:
   - integration-file-environment-precedence.md
   - runtime-backend-add-and-remove.md
   - unify-mcp-tools-transport-paths.md
+researching:
+  - token-output-shares-stdout-with-logs.md

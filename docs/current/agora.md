@@ -292,13 +292,10 @@ On shutdown, the subsystem retracts the advertisement, closes the serve listener
 
 ## Manual Smoke
 
-Run these checks against a live Agora controller and Ziti fabric:
+Most of what this section used to describe is now executed by the end-to-end smoke suite: Agora-only serving, the persistent named tunnel, dual zrok and Agora listeners, `transport.type: agora` backends against `mcp-bridge --network=agora`, and `mcp-tools` in both stdio and HTTP mode. Run it with `make e2e`; see [End-to-End Smoke Suite](smoke-suite.md) for what each scenario covers and what it needs.
+
+What remains manual is the part whose verification is a person looking at a screen:
 
 | Scenario | Expected observation |
 |---|---|
-| Ephemeral Agora-only gateway: `agora.enabled: true`, `agora.serve.enabled: true`, `zrok.share.enabled: false` | `mcp-tools run --agora <gateway tunnel>` lists and calls tools; no `127.0.0.1` Agora listener exists in the process |
-| Persistent named tunnel: pre-provision the serve tunnel via `tunnel.Create`, set `serve.tunnel` to it, restart the gateway | clients reconnect under the same name across restarts; the tunnel is not deleted on shutdown |
-| Dual listener gateway: zrok share and Agora serve both enabled | zrok share token and Agora tunnel both respond |
-| Agora backend: gateway backend uses `transport.type: agora` against `mcp-bridge --network=agora` | discovery and tool calls route through the remote bridge; two backends on one tunnel share one attachment |
 | Catalog | the dashboard shows the `mcp-gateway` card with the gateway-product accent |
-| HTTP mode | `mcp-tools http --agora <gateway tunnel> --bind 127.0.0.1:8080` exposes a local HTTP MCP endpoint |

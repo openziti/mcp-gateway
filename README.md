@@ -332,6 +332,7 @@ Local builds report a developer build (e.g. `v0.1.x [developer build]`); release
 
 - [Example Configuration](etc/mcp-gateway.yml) - Fully documented configuration file
 - [Agora Integration](docs/current/agora.md) - Agora serving, backend connects, mcp-tools dialing, and smoke scenarios
+- [End-to-End Smoke Suite](docs/current/smoke-suite.md) - `make e2e`, the hand-run check across all three components
 - [OpenZiti Documentation](https://openziti.io/docs)
 - [zrok Documentation](https://docs.zrok.io)
 - [MCP Specification](https://modelcontextprotocol.io)
