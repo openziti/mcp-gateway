@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v0.1.11
+
 CHANGE: **The Streamable HTTP session lifecycle moved out of `gateway` into a new `streamable` package.** `gateway.StreamableSessions` is now `streamable.Sessions` and `gateway.DefaultSessionIdleTimeout` is now `streamable.DefaultSessionIdleTimeout`; Go consumers importing either symbol must update the import path. The move exists so `mcp-tools` can share the same per-session lifecycle, which it could not do while the type lived in `gateway` — `gateway` imports `tools`, so the dependency could only run one way.
 
 FIX: **`mcp-tools http` now gives every local client its own session on the remote gateway or bridge.** It previously opened one fabric MCP session at startup and served every local Streamable HTTP session from it, so multiple agents behind one `mcp-tools http` shared a single remote session and its backend state — defeating the isolation the gateway and bridge provide. The zrok access or Agora attachment is still acquired once and held for the process lifetime; only the MCP session is now per-client, and it is released when the client disconnects, its session expires, its initialization fails, or `mcp-tools` shuts down. `--stateless` mode owns a fabric session per request. `mcp-tools http` also gains `--session-idle-timeout`, matching `mcp-bridge`.
