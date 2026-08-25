@@ -217,8 +217,8 @@ For `mcp-gateway`, put the same account emails under `zrok.share.access_grants` 
 
 ```bash
 # create a persistent share with a chosen name
-zrok2 create share my-gateway
-# outputs the share token
+zrok2 create share -s my-gateway
+# the chosen name is the share token
 
 # use the token in a gateway config (share_token: my-gateway) or bridge
 mcp-gateway run config.yml

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v0.1.10
+
 CHANGE: **Fabric-served gateway and bridge endpoints now use Streamable HTTP instead of the deprecated SSE transport.** `mcp-tools run` and `mcp-tools http` move with that wire surface over both zrok and Agora; there is no dual-serving transition.
 
 CHANGE: **Backend transports with no explicit `protocol` now default to Streamable HTTP.** Hand-written HTTP/HTTPS configurations for legacy SSE endpoints must set `protocol: sse`; zrok and Agora backends now honor and validate the same operator setting.
